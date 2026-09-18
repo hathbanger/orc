@@ -14,7 +14,7 @@ CMNDCNTR ?= $(HOME)/code/hathbanger/cmndcntr
 FETCHER := $(CMNDCNTR)/scripts/fetch-artificial-analysis-leaderboard.mjs
 OUT     := data/quality.json
 
-.PHONY: refresh-quality build
+.PHONY: refresh-quality build test dogfood dogfood-real
 
 refresh-quality:
 	@command -v node >/dev/null || { echo "node required" >&2; exit 1; }
@@ -25,3 +25,12 @@ refresh-quality:
 
 build:
 	./build.sh
+
+test:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test -p 'fusion_test.py'
+
+dogfood:
+	./test/fusion_dogfood.sh
+
+dogfood-real:
+	FUSION_REAL=$${FUSION_REAL:-0} ./test/fusion_real_smoke.sh

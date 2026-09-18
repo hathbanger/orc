@@ -157,6 +157,21 @@ case "$TOOLS_ONLY" in
     printf '  ok  models --tools drops no-tools models\n' ;;
 esac
 
+FILTER_HOME="$TMP/free-tools-home"
+mkdir -p "$FILTER_HOME"
+jq '(.data[] | select(.id == "test/free").supported_parameters) = ["tools"]' "$FIX/models.json" > "$FILTER_HOME/models.json"
+FREE_TOOLS="$(ORC_HOME="$FILTER_HOME" "$ROOT/orc" models --free --tools 2>/dev/null | strip_ansi)"
+t_contains "models --free --tools keeps free tool model" "test/free" "$FREE_TOOLS"
+case "$FREE_TOOLS" in
+  *test/paid*|*test/notools*)
+    FAIL=$((FAIL + 1))
+    printf 'FAIL  models --free --tools lists a paid or no-tools model\n'
+    printf '  got:  %s\n' "$FREE_TOOLS" ;;
+  *)
+    PASS=$((PASS + 1))
+    printf '  ok  models --free --tools filters both dimensions\n' ;;
+esac
+
 echo "== profiles + project config =="
 export ORC_HOME="$TMP/prof-home"
 mkdir -p "$ORC_HOME"

@@ -1,0 +1,33 @@
+{
+  "lead": "claude",
+  "sidekick": "codex",
+  "telemetry": {"enabled": true, "include_content": false},
+  "routes": {
+    "orc-free": {
+      "agent": "claude",
+      "command": "orc",
+      "model_selector": "free",
+      "permission_mode": "plan",
+      "permission_prompts": "none",
+      "max_budget_usd": 0.10
+    },
+    "orc-best": {
+      "agent": "claude",
+      "command": "orc",
+      "model_selector": "best",
+      "permission_mode": "plan",
+      "permission_prompts": "none",
+      "max_budget_usd": 0.40
+    }
+  },
+  "ultra": {
+    "max_stages": 5,
+    "stages": {
+      "explore": {"agent": "claude", "route": "orc-free", "write": false},
+      "plan": {"agent": "claude", "route": "orc-free", "write": false},
+      "implement": {"agent": "codex", "write": true},
+      "review": {"agent": "claude", "route": "orc-free", "write": false},
+      "synthesize": {"agent": "claude", "route": "orc-best", "write": false}
+    }
+  }
+}

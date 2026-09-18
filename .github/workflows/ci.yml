@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck orc hud.sh hud.sh.in install.sh build.sh test/run.sh
+      - run: shellcheck orc hud.sh hud.sh.in install.sh build.sh test/run.sh test/fusion_dogfood.sh test/fusion_real_smoke.sh
 
   test:
     strategy:
@@ -26,3 +26,5 @@ jobs:
           git diff --exit-code orc hud.sh
       - name: run tests
         run: ./test/run.sh
+      - name: run Fusion tests
+        run: make test dogfood

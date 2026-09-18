@@ -296,6 +296,87 @@ scraper is in cmndcntr; run `make refresh-quality` from the orc source
 to update the bundled snapshot, then `./build.sh` and reinstall).
 `orc env` is `launch` without the `exec`.
 
+## Fusion: Claude lead + Codex sidekick
+
+`fusion` adds a small lead/sidekick harness beside `orc`. It keeps the lead agent in charge of the user conversation and final review, then delegates bounded work to Claude Code or Codex through a shared task contract. Each run records its task, JSONL events, stdout, stderr, result, and reusable session id under `.fusion/` in the workspace.
+
+The lead can call the other agent through an MCP server:
+
+```sh
+fusion lead                 # Claude leads by default
+fusion lead --agent codex   # Codex leads and can call Claude
+fusion doctor
+fusion trace --limit 50
+fusion usage --limit 1000
+```
+
+For a direct worker call:
+
+```sh
+fusion delegate --agent codex --role implementation \
+  --success 'tests pass' \
+  'Add the requested feature and run the narrowest meaningful test suite.'
+fusion ultra 'Add the requested feature and ship the smallest tested change.'
+fusion ultra --cheap-only 'Explore and review this without spending on a strong route.'
+fusion ultra --harness codex 'Run the full bounded pipeline through Codex.'
+```
+
+`fusion` uses a single writer lock for a workspace, so two write tasks cannot edit the same checkout at once. Use separate Git worktrees when you want parallel write tasks. Read-only tasks can run independently. The default Codex sidekick uses `codex exec --json`; the default Claude sidekick uses Claude Code print mode with structured JSON output.
+
+### Ultra without the token fire
+
+Ultra is an explicit bounded pipeline modeled after the useful part of
+[UltraCode](https://github.com/diepquynh/ultracode): explore, plan, implement,
+review, and synthesize. It uses fresh stage contexts and JSON handoff files in
+`.fusion/ultra/`, so later stages read evidence instead of inheriting every
+earlier transcript. The stage count is capped, writes are serialized, and the
+example routes cap each ORC-backed Claude call with `--max-budget-usd`.
+
+Copy `.fusion.json.example` to `.fusion.json` in a project, then make sure ORC
+has a current model catalog and key. The `orc-free` route selects the highest
+ranked currently free tool-capable model; `orc-best` selects the highest ranked
+tool-capable model from ORC's live catalog. The IDs are resolved at run time so
+the pipeline does not pin a stale model name. Override either route with an
+explicit `model`, `profile`, or `launcher_args` when you want a fixed lane.
+
+```sh
+cp .fusion.json.example .fusion.json
+orc refresh
+fusion ultra 'Refactor the cache layer and keep the existing tests green.'
+orc fusion ultra --cheap-only 'Review the current diff for regressions.'
+```
+
+`fusion ultra` is opt-in because a multi-stage workflow can spend more tokens
+than a direct lead/sidekick run. Use `fusion delegate --route orc-free ...`
+for one bounded cheap worker, or `--route orc-best` when the stage needs a
+stronger model. `--harness codex` runs every configured stage through Codex;
+`fusion lead --agent codex` makes Codex the interactive lead and exposes the
+same MCP delegation tools for Claude workers.
+
+### Traces and dogfood
+
+Every dispatched worker writes a metadata-only span to
+`.fusion/traces.jsonl`. Spans include the trace and parent IDs, agent, route,
+resolved model when the provider reports it, duration, status, token usage,
+tests, blockers, and links to the raw run artifacts. Prompts and model output
+are not copied into telemetry; inspect the run's `stdout.log` when you need
+that detail. Set `telemetry.enabled` to `false` in `.fusion.json` to disable
+the trace ledger.
+
+```sh
+make test                 # deterministic unit tests
+make dogfood               # actual fusion CLI + fake Claude/Codex subprocesses
+fusion trace --limit 50   # inspect spans
+fusion usage              # aggregate tokens, latency, and reported costs
+FUSION_REAL=1 make dogfood-real  # opt-in provider smoke; consumes quota
+```
+
+The real smoke command returns exit code 2 when the CLI was reached but a
+provider blocked the turn for quota, authentication, or session limits. That
+keeps provider availability separate from harness regressions.
+
+The architecture and source map are in [FUSION_RESEARCH.md](FUSION_RESEARCH.md).
+
 ## Development
 
 The shipped scripts are assembled. Sources of truth:

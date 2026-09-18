@@ -562,6 +562,7 @@ def reprice($P):
         .id)[]
     | select($filter == "all"
              or ($filter == "free" and is_free)
+             or ($filter == "free-tools" and is_free and has_tools)
              or ($filter == "tools" and has_tools)
              or ($filter == "fit" and ($fit[.id] // "") == "FIT"))
     | [ .id,
@@ -2655,6 +2656,7 @@ usage:
        [--json] [--by model|project|day]
   orc models [query]      list models with pricing + context + tool + fit
   orc models --free [...] list only currently free models
+  orc models --free --tools list free models that advertise tool support
   orc models --tools [..] list only models advertising tool support
   orc models --fit [...]  list only models that passed orc probe --fit
   orc hud [on|off|demo]   toggle the statusline HUD / preview it on newest transcript
@@ -2662,6 +2664,7 @@ usage:
   orc env                 print the export lines launch uses (contains your key)
   orc refresh             force-refresh the cached model list
   orc doctor              check everything end to end (resolved model + fit)
+  orc fusion [...]        run the Fusion/Ultra orchestration layer
   orc probe [model]       smoke-test the launch path (1-token request; default: resolved model)
   orc probe --fit [model] tool-loop smoke test; result cached 24h as FIT/FAIL
   orc config              open config in $EDITOR
@@ -2684,6 +2687,14 @@ EOF
 
 case "${1:-}" in
   help|-h|--help) usage; exit 0 ;;
+  fusion)
+    shift
+    fusion_bin="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/fusion"
+    if [ ! -x "$fusion_bin" ]; then
+      fusion_bin="$(command -v fusion || true)"
+    fi
+    [ -x "$fusion_bin" ] || { err "fusion is not installed beside orc and is not on PATH"; exit 127; }
+    exec "$fusion_bin" "$@" ;;
   setup) setup_wizard; exit 0 ;;
   key) key_wizard; exit 0 ;;
   doctor) doctor ;;
@@ -2777,12 +2788,23 @@ case "${1:-}" in
     fetch_models
     fetch_quality
     model_filter="all"
-    case "${1:-}" in
-      --free|free) model_filter="free"; shift ;;
-      --tools|tools) model_filter="tools"; shift ;;
-      --fit|fit) model_filter="fit"; shift ;;
-    esac
-    if [ -n "${1:-}" ]; then model_rows "$model_filter" | grep -i -- "$1" | table
+    want_free=0; want_tools=0; want_fit=0; query=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --free|free) want_free=1 ;;
+        --tools|tools) want_tools=1 ;;
+        --fit|fit) want_fit=1 ;;
+        --json) err "models --json is not available in this release"; exit 2 ;;
+        *) query="$1" ;;
+      esac
+      shift
+    done
+    if [ "$want_fit" = "1" ]; then model_filter="fit"
+    elif [ "$want_free" = "1" ] && [ "$want_tools" = "1" ]; then model_filter="free-tools"
+    elif [ "$want_free" = "1" ]; then model_filter="free"
+    elif [ "$want_tools" = "1" ]; then model_filter="tools"
+    fi
+    if [ -n "$query" ]; then model_rows "$model_filter" | grep -i -- "$query" | table
     else model_rows "$model_filter" | table
     fi
     exit 0 ;;
