@@ -331,6 +331,36 @@ def parse_handoff(text: str) -> dict[str, Any]:
     }
 
 
+QUOTA_RE = re.compile(r"(session limit|usage limit|rate limit|quota|too many requests)", re.IGNORECASE)
+RESETS_RE = re.compile(r"resets?(?:\s+(?:at|in))?\s+([0-9][0-9:]*\s*(?:am|pm)?[^\n.·]*)", re.IGNORECASE)
+PERMISSION_RE = re.compile(r"(permission (?:check|denied|prompt)|not allowed to|requires approval|denied by policy)", re.IGNORECASE)
+REFUSAL_RE = re.compile(r"(I can(?:'|no)t help with|I won't|refus(?:e|ed|al))", re.IGNORECASE)
+
+
+def classify_verdict(status: str, failure: str | None, summary: str, exit_code: int) -> dict[str, Any]:
+    """A structural verdict beside the worker's free-text summary: ok | error | quota | refused |
+    blocked_by_permissions. A session or rate limit is `quota` with the reset text the CLI printed, so a
+    harness can treat it as an unmeasured round instead of a zero score."""
+    text = " ".join(part for part in (failure or "", summary or "") if part)
+    quota = QUOTA_RE.search(text)
+    if quota:
+        match = RESETS_RE.search(text)
+        return {"verdict": "quota", "reason": quota.group(1).lower(), "resets_at": match.group(1).strip() if match else None}
+    permission = PERMISSION_RE.search(text)
+    if permission:
+        return {"verdict": "blocked_by_permissions", "reason": permission.group(1).lower()}
+    if status in {"success", "partial"}:
+        return {"verdict": "ok", "reason": status}
+    refusal = REFUSAL_RE.search(text)
+    if refusal:
+        return {"verdict": "refused", "reason": refusal.group(1).lower()}
+    if failure and "timeout" in failure.lower():
+        return {"verdict": "error", "reason": "timeout"}
+    if exit_code == 127:
+        return {"verdict": "error", "reason": "missing_binary"}
+    return {"verdict": "error", "reason": (failure or status or "error")[:120]}
+
+
 def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
 
@@ -1596,6 +1626,8 @@ def dispatch(
             "model": metadata.get("model"),
             "execution_choice": metadata.get("execution_choice"),
             "summary": f"{argv[0]} is not available on PATH",
+            "verdict": "error",
+            "verdict_reason": "missing_binary",
             "changed": [],
             "tests": [],
             "blockers": [f"install or expose {argv[0]} before dispatching"],
@@ -1709,6 +1741,7 @@ def dispatch(
     except progress.WorkerCancelled as exc:
         summary, failure, status, exit_code = "worker interrupted", str(exc), "blocked", 130
     duration_ms = int((time.monotonic() - started) * 1000)
+    verdict = classify_verdict(status, failure, str(handoff.get("summary") or summary), exit_code)
     progress.emit(label, f"worker {status} after {progress.elapsed(duration_ms / 1000)}; exit {exit_code}")
     blockers = handoff.get("blockers", []) + (evidence_notes if task["agent"] != "codex" else []) + ([failure] if failure else [])
     result = {
@@ -1722,6 +1755,9 @@ def dispatch(
         "model": model,
         "execution_choice": metadata.get("execution_choice"),
         "summary": compact(str(handoff.get("summary") or summary).strip(), int(config.get("max_result_chars", 12000))),
+        "verdict": verdict["verdict"],
+        "verdict_reason": verdict.get("reason"),
+        "resets_at": verdict.get("resets_at"),
         "changed": handoff.get("changed", []),
         "tests": handoff.get("tests", []),
         "blockers": blockers,

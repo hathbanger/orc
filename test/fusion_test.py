@@ -2157,3 +2157,25 @@ class McpResponseShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerdictTest(unittest.TestCase):
+    def test_session_limit_is_quota_with_reset(self):
+        verdict = fusion_core.classify_verdict("error", None, "You've hit your session limit · resets 5:40pm", 1)
+        self.assertEqual(verdict["verdict"], "quota")
+        self.assertEqual(verdict["reason"], "session limit")
+        self.assertTrue(verdict["resets_at"].startswith("5:40pm"))
+
+    def test_success_is_ok(self):
+        self.assertEqual(fusion_core.classify_verdict("success", None, "STATUS: success", 0)["verdict"], "ok")
+
+    def test_permission_block(self):
+        verdict = fusion_core.classify_verdict("error", None, "the permission check blocked it: this session has no way to approve commands", 1)
+        self.assertEqual(verdict["verdict"], "blocked_by_permissions")
+
+    def test_timeout_and_missing_binary_are_errors_with_reasons(self):
+        self.assertEqual(fusion_core.classify_verdict("blocked", "timeout after 3600 seconds", "worker timed out", 124)["reason"], "timeout")
+        self.assertEqual(fusion_core.classify_verdict("error", None, "claude is not available on PATH", 127)["reason"], "missing_binary")
+
+    def test_refusal(self):
+        self.assertEqual(fusion_core.classify_verdict("error", None, "I can't help with that request.", 1)["verdict"], "refused")
