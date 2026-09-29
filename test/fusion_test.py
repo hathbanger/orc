@@ -891,8 +891,10 @@ print(json.dumps({'conversation_id':'conv-partial','status':'SUCCESS','response'
                 1,
             )
         result = json.loads(output.getvalue())
-        self.assertEqual(result["status"], "error")
+        # Surfaced, not dropped: a worked-around non-baseline denial is partial (finding 199).
+        self.assertEqual(result["status"], "partial")
         self.assertIn("RunCommand", " ".join(result["blockers"]))
+        self.assertEqual(result["denied_count"], 1)
 
     def test_claude_permission_denials_are_surfaced_as_blockers(self):
         # Real populated permission_denials entries are unverified (see
@@ -920,7 +922,7 @@ print(json.dumps({
                 1,
             )
         result = json.loads(output.getvalue())
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "partial")
         self.assertIn("Bash", " ".join(result["blockers"]))
         self.assertIn("command not in allowlist", " ".join(result["blockers"]))
 

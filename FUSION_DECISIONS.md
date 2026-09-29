@@ -81,8 +81,11 @@ it. Interactive lead sessions use their own provider controls.
    `MultiEdit`, `Glob`, `Grep`, `LS`, agy's `ViewFile`/`ListDir`/...;
    matched case- and punctuation-insensitively). Denying anything else,
    such as `Bash` in restricted mode or an MCP tool, is specific to the
-   task: the run still fails as `permission_denied`, but the lane stays a
-   candidate. Each result and span records `denied_tools`, taken from
+   task and the lane stays a candidate. Such a run fails as
+   `permission_denied` unless the worker worked around it: when it exited 0
+   with a handoff, the result is `partial` (or `blocked` when it reported
+   so), the denials stay in `blockers`, `denied_tools` and `denied_count`,
+   and the gate scores it; a denied baseline tool always fails. Each result and span records `denied_tools`, taken from
    Claude's `permission_denials` or agy's `denied_actions`, else from
    `permission denied: X` blocker lines. A denial that names no tool,
    including spans recorded before `denied_tools` existed, keeps the

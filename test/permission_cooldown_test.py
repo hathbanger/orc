@@ -150,15 +150,37 @@ class DeniedToolsDispatchTest(unittest.TestCase):
             "result": "STATUS: success\nSUMMARY: done\nCHANGED: none\nTESTS: none\nBLOCKERS: none",
             "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "make"}},
                                    {"tool_name": "Bash", "reason": "not allowed"}]})
-        self.assertEqual(core.failure_class(result), "permission_denied")
+        # Finding 199: a Bash-only denial the worker worked around is a partial result, not a failure.
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(core.failure_class(result), "worker_error")
         self.assertEqual(result["denied_tools"], ["Bash"])
         self.assertEqual(result["denied"], [{"tool": "Bash", "input_head": '{"command":"make"}'},
                                             {"tool": "Bash", "input_head": ""}])
         self.assertEqual(result["denied_count"], 2)
-        self.assertEqual(result["verdict"], "blocked_by_permissions")
+        self.assertEqual(result["verdict"], "ok")
+        self.assertIn("Bash", " ".join(result["blockers"]))
         self.assertEqual(span["denied_tools"], ["Bash"])
-        self.assertEqual(span["failure_class"], "permission_denied")
+        self.assertEqual(span["failure_class"], "worker_error")
         self.assertFalse(core.denial_blocks_lane(span))
+
+    def test_a_denied_baseline_tool_still_fails_after_exit_zero(self):
+        result, span = self.dispatch("claude", {
+            "is_error": False, "session_id": "s",
+            "result": "STATUS: success\nSUMMARY: done\nCHANGED: none\nTESTS: none\nBLOCKERS: none",
+            "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "make"}},
+                                   {"tool_name": "Edit", "tool_input": {"file_path": "/repo/a.py"}}]})
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(core.failure_class(result), "permission_denied")
+        self.assertEqual(result["verdict"], "blocked_by_permissions")
+        self.assertTrue(core.denial_blocks_lane(span))
+
+    def test_a_worked_around_denial_keeps_a_blocked_report(self):
+        result, _ = self.dispatch("claude", {
+            "is_error": False, "session_id": "s",
+            "result": "STATUS: blocked\nSUMMARY: could not run the suite\nCHANGED: none\nTESTS: none\nBLOCKERS: needs make",
+            "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "make"}}]})
+        self.assertEqual(result["status"], "blocked")
+        self.assertNotEqual(core.failure_class(result), "permission_denied")
 
     def test_agy_denials_reach_result_and_span(self):
         result, span = self.dispatch("agy", {"status": "SUCCESS", "response": "",

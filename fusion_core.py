@@ -716,7 +716,8 @@ def failure_class(result: dict[str, Any]) -> str | None:
     if result.get("failure_phase") in {"snapshot_before_review", "snapshot_after_review"}:
         return "coordinator_error"
     text = " ".join(str(item) for item in result.get("blockers", [])).lower()
-    if any(marker in text for marker in PERMISSION_MARKERS):
+    worked_around = result.get("status") in {"partial", "blocked"} and result.get("exit_code") == 0 and not denial_blocks_lane(result)
+    if any(marker in text for marker in PERMISSION_MARKERS) and not worked_around:
         return "permission_denied"
     if result.get("status") in {"success", "cache_hit"}:
         return None
@@ -2010,8 +2011,16 @@ def dispatch(
         summary, failure, status, exit_code = "worker interrupted", str(exc), "blocked", 130
     duration_ms = int((time.monotonic() - started) * 1000)
     progress.emit(label, f"worker {status} after {progress.elapsed(duration_ms / 1000)}; exit {exit_code}")
-    blockers = handoff.get("blockers", []) + (evidence_notes if task["agent"] != "codex" else []) + ([failure] if failure else [])
     denied = provider_denials(task["agent"], worker_stdout)
+    denied_tools = normalize_tools(item["tool"] for item in denied) or blocker_denied_tools(evidence_notes if task["agent"] != "codex" else [])
+    # A worker that was denied only non-baseline tools (a Bash command outside its
+    # allowlist) and still exited 0 with a handoff worked around the denial: that
+    # is a degraded result the gate should score, not a permission failure. The
+    # denials stay in blockers and denied_count; a denied baseline tool still fails.
+    if (status == "error" and not failure and exit_code == 0 and summary.strip() and task["agent"] != "codex"
+            and evidence_notes and not denial_blocks_lane({"denied_tools": denied_tools})):
+        status = "blocked" if handoff.get("reported_status") == "blocked" else "partial"
+    blockers = handoff.get("blockers", []) + (evidence_notes if task["agent"] != "codex" else []) + ([failure] if failure else [])
     result = {
         "schema": SCHEMA,
         "run_id": task["run_id"],
@@ -2028,7 +2037,7 @@ def dispatch(
         "tests": handoff.get("tests", []),
         "blockers": blockers,
         "provider_failure": failure,
-        "denied_tools": normalize_tools(item["tool"] for item in denied) or blocker_denied_tools(blockers),
+        "denied_tools": denied_tools or blocker_denied_tools(blockers),
         "denied": denied,
         "denied_count": len(denied),
         "command_evidence": evidence_notes if task["agent"] == "codex" else [],
