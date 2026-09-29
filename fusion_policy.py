@@ -242,6 +242,8 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         seen_commands.add(family)
     choices = []
     pool = auto_pool(config, task)
+    automatic = task.get("agent", "auto") == "auto" and not task.get("route")
+    needs = set(task.get("needs") or []) if automatic else set()
     preferred = config.get("sidekick", "codex")
     candidates = [(name, name, None) for name in dict.fromkeys([preferred, "codex", "claude", "agy", "grok"])]
     candidates += [(name, settings.get("agent"), name) for name, settings in config.get("routes", {}).items()]
@@ -257,6 +259,13 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         if agent not in {"claude", "codex", "agy", "grok"}:
             continue
         settings = core.agent_settings(config, {"agent": agent, "route": route})
+        lacks = settings.get("lacks") or []
+        if not isinstance(lacks, list) or not all(isinstance(item, str) for item in lacks):
+            raise ValueError(f"{key}: lacks must be a list of capability names")
+        unmet = sorted(needs & set(lacks))
+        if unmet:
+            drop(key, "lacks " + ", ".join(unmet) + " this task needs")
+            continue
         quota = headroom.get(core.lane_key(agent, settings))
         if quota:
             if quota_audit is not None:
@@ -535,8 +544,13 @@ def route_task(config, task, store, rng=None):
         cost_epsilon = config.get("decisions", {}).get("cost_epsilon", 0.05)
         within_route = False
         minimum = explore = None
+        needs_unmet = False
         if automatic:
             candidates = route_candidates(config, task, store, rejected=rejected, quota_audit=quota_audit)
+            if not candidates and task.get("needs"):
+                # No lane can meet the needs: run blind on the full pool rather than refuse the work.
+                needs_unmet = True
+                candidates = route_candidates(config, {**task, "needs": []}, store, rejected=rejected, quota_audit=quota_audit)
             if ranking:
                 minimum, explore = exploration(ranking, task, candidates)
                 candidates = rank_by_outcomes(candidates, minimum, warm_epsilon, explore, cost_epsilon)
@@ -621,6 +635,7 @@ def route_task(config, task, store, rng=None):
         chances = propensities(keys, selected["key"], 0.0 if applied else effective)
         engine.store.append("routing_log", **context(task), decision_id=record["id"] if record else None, scope=scope,
                             write=bool(task.get("write")),
+                            **({"needs": task["needs"], "needs_unmet": needs_unmet} if task.get("needs") else {}),
                             policy={"rank_by_outcomes": minimum, "explore": explore, "warm_epsilon": warm_epsilon if ranking else None,
                                     "epsilon": effective, "routing_epsilon": epsilon, "laya_applied": applied,
                                     "priors": priors_policy(config),

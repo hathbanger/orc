@@ -94,6 +94,21 @@ or route. Unset, every configured lane is a candidate.
 {"decisions": {"auto_routes": ["claude-opus-medium", "claude-opus-high", "codex-astra-medium", "codex-astra-high"]}}
 ```
 
+An agent or route may declare capabilities it `lacks`, as a list of names. A
+task that `--needs` one of them (CLI `fusion delegate --needs local_server`,
+MCP `needs`) skips that lane during automatic routing, with the reason
+`lacks <name> this task needs`. A `lacks` on an agent applies to every route
+of that agent. When no lane can meet a task's needs, automatic routing runs
+on the full pool instead of refusing the work and records `needs_unmet: true`
+in the routing log. Needs never move a task off a lane it named.
+
+```json
+{"codex": {"lacks": ["local_server"]}}
+```
+
+`local_server` is the need for binding and calling a server on 127.0.0.1 and
+listing processes, which Codex's restricted sandbox denies.
+
 ## Control workspace
 
 To collect evidence from several checkouts in one controller directory:

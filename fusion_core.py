@@ -1161,6 +1161,24 @@ def writer_lock(workspace: Path, enabled: bool, control_workspace: Path | None =
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+NEED_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def validate_needs(needs: Any) -> list[str]:
+    """Capabilities a task needs from its lane (`local_server`), sorted and de-duplicated."""
+    if needs is None:
+        return []
+    if not isinstance(needs, list) or not all(isinstance(need, str) and NEED_RE.match(need) for need in needs):
+        raise ValueError("needs must be a list of lower-case names such as local_server")
+    return sorted(set(needs))
+
+
+def cli_need(value: str) -> str:
+    if not NEED_RE.match(value):
+        raise argparse.ArgumentTypeError("a need is a lower-case name such as local_server")
+    return value
+
+
 def make_task(
     workspace: Path,
     agent: str,
@@ -1175,8 +1193,10 @@ def make_task(
     route: str | None = None,
     settings_overrides: dict[str, Any] | None = None,
     timeout_seconds: int | None = None,
+    needs: list[str] | None = None,
 ) -> dict[str, Any]:
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    needs = validate_needs(needs)
     return {
         "schema": SCHEMA,
         "run_id": run_id,
@@ -1194,6 +1214,7 @@ def make_task(
         "route": route,
         "settings_overrides": settings_overrides or {},
         **({"timeout_seconds": validate_timeout(timeout_seconds)} if timeout_seconds is not None else {}),
+        **({"needs": needs} if needs else {}),
         "created_at": now_ms(),
     }
 
@@ -2253,6 +2274,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "route": {"type": "string", "description": "Optional named route such as orc-free or orc-best."},
                     "model": {"type": "string", "description": "Model for this task, overriding the route and agent settings."},
                     "reasoning_effort": {"type": "string", "enum": sorted(EFFORTS), "description": "Codex, or Claude Code (low-max); requires model."},
+                    "needs": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}, "description": "Capabilities the task needs from its lane, such as local_server; automatic routing skips lanes whose config `lacks` one."},
                 },
                 "required": ["agent", "task"],
             },
@@ -2425,6 +2447,7 @@ def run_mcp(workspace: Path, config: dict[str, Any]) -> int:
                             route=args.get("route"),
                             timeout_seconds=timeout_seconds,
                             settings_overrides=choice_overrides(args.get("model"), args.get("reasoning_effort")),
+                            needs=args.get("needs"),
                         )
                         if not task["task"]:
                             raise ValueError("task is required")
@@ -2673,6 +2696,8 @@ def build_parser() -> argparse.ArgumentParser:
     delegate = sub.add_parser("delegate", help="run one bounded sidekick task")
     delegate.add_argument("--agent", choices=["auto", "claude", "codex", "agy", "grok"], help="worker agent; defaults to the named route agent")
     delegate.add_argument("--role", default="implementation")
+    delegate.add_argument("--needs", action="append", type=cli_need, default=[], metavar="NAME",
+                          help="capability the task needs from its lane, such as local_server (repeatable); auto skips lanes whose config lacks it")
     delegate.add_argument("--timeout", type=cli_timeout, metavar="SECONDS", help="worker timeout for this call (60..14400 seconds); overrides config")
     delegate.add_argument("--read-only", action="store_true", help="give the worker a read-only workspace")
     delegate.add_argument("--fresh", action="store_true", help="start a fresh agent session")
@@ -3041,6 +3066,7 @@ def _main(args, parser) -> int:
             route=args.route,
             settings_overrides=choice_overrides(args.model, args.reasoning_effort),
             timeout_seconds=args.timeout,
+            needs=args.needs,
         )
         result = dispatch(config, task, RunStore(workspace))
         print_result(result, args.json)

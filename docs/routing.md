@@ -99,6 +99,13 @@ Use it to keep cheap or unproven lanes out of work that ships while still
 letting `auto` pick model and effort among the lanes you trust. See
 [configuration](configuration.md).
 
+### Task needs
+
+A task may name capabilities it needs (`--needs local_server`). Automatic
+routing drops lanes whose config `lacks` one before ranking; if that leaves
+none, it routes on the full pool and logs `needs_unmet`. The routing log
+records `needs` for every such choice. See [configuration](configuration.md).
+
 ## Accounts and quota headroom
 
 Named routes in `.fusion.json` can set `env` to an object of string environment

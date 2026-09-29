@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fusion_core as core
 import fusion_policy as policy
+from fusion_decisions import DecisionStore, read_jsonl
 
 
 class AutoRoutesTest(unittest.TestCase):
@@ -60,6 +61,48 @@ class AutoRoutesTest(unittest.TestCase):
             self.config['decisions']['auto_routes'] = pool
             with self.assertRaisesRegex(ValueError, 'decisions.auto_routes'):
                 policy.auto_pool(self.config, self.task())
+
+
+    def test_needs_skip_lanes_that_lack_them(self):
+        self.config['decisions']['auto_routes'] = ['opus', 'astra']
+        self.config['routes']['astra']['lacks'] = ['local_server']
+        task = self.task()
+        task['needs'] = ['local_server']
+        rejected = {}
+        self.assertEqual(self.keys(task, rejected), ['opus'])
+        self.assertEqual(rejected['astra'], 'lacks local_server this task needs')
+
+    def test_agent_level_lacks_apply_to_its_routes(self):
+        self.config['decisions']['auto_routes'] = ['opus', 'astra']
+        self.config['codex'] = {'lacks': ['local_server']}
+        task = self.task()
+        task['needs'] = ['local_server']
+        self.assertEqual(self.keys(task), ['opus'])
+
+    def test_needs_do_not_bind_a_named_lane(self):
+        self.config['routes']['astra']['lacks'] = ['local_server']
+        task = self.task('auto', route='astra')
+        task['needs'] = ['local_server']
+        self.assertIn('astra', self.keys(task))
+
+    def test_no_lane_meets_the_needs_runs_blind_and_logs_it(self):
+        self.config['decisions'].update({'auto_routes': ['opus', 'astra'], 'mode': 'shadow'})
+        self.config['routes']['astra']['lacks'] = ['local_server']
+        self.config['routes']['opus']['lacks'] = ['local_server']
+        task = self.task()
+        task['needs'] = ['local_server']
+        with patch.dict(os.environ, {'FUSION_DECISIONS_MODE': 'shadow'}), patch.object(core, 'executable', return_value=True):
+            policy.route_task(self.config, task, self.store)
+        self.assertIn(task['route'], {'opus', 'astra'})
+        log = [row for row in read_jsonl(DecisionStore(self.root).path) if row.get('event') == 'routing_log']
+        self.assertEqual((log[-1]['needs'], log[-1]['needs_unmet']), (['local_server'], True))
+
+    def test_make_task_normalizes_and_validates_needs(self):
+        task = core.make_task(self.root, 'auto', 'x', 'implementation', [], [], None, False, True, needs=['b', 'a', 'b'])
+        self.assertEqual(task['needs'], ['a', 'b'])
+        self.assertNotIn('needs', core.make_task(self.root, 'auto', 'x', 'implementation', [], [], None, False, True))
+        with self.assertRaisesRegex(ValueError, 'needs'):
+            core.make_task(self.root, 'auto', 'x', 'implementation', [], [], None, False, True, needs=['Local-Server'])
 
 
 if __name__ == '__main__':

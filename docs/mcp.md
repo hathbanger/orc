@@ -154,6 +154,14 @@ Delegate a bounded task to the other coding agent and receive a structured hando
       "description": "Model for this task, overriding the route and agent settings.",
       "type": "string"
     },
+    "needs": {
+      "description": "Capabilities the task needs from its lane, such as local_server; automatic routing skips lanes whose config `lacks` one.",
+      "items": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
     "reasoning_effort": {
       "description": "Codex, or Claude Code (low-max); requires model.",
       "enum": [

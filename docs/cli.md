@@ -299,7 +299,7 @@ run one bounded sidekick task
 
 ```text
 usage: fusion delegate [-h] [--agent {auto,claude,codex,agy,grok}] [--role ROLE]
-                       [--timeout SECONDS] [--read-only] [--fresh]
+                       [--needs NAME] [--timeout SECONDS] [--read-only] [--fresh]
                        [--session-key SESSION_KEY] [--route ROUTE] [--model MODEL]
                        [--reasoning-effort {high,low,max,medium,minimal,none,ultra,xhigh}]
                        [--success SUCCESS] [--constraint CONSTRAINT]
@@ -313,6 +313,8 @@ options:
   --agent {auto,claude,codex,agy,grok}
                           worker agent; defaults to the named route agent
   --role ROLE
+  --needs NAME            capability the task needs from its lane, such as local_server
+                          (repeatable); auto skips lanes whose config lacks it
   --timeout SECONDS       worker timeout for this call (60..14400 seconds); overrides
                           config
   --read-only             give the worker a read-only workspace
