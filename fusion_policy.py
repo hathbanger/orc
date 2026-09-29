@@ -241,12 +241,16 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         seen.add(key)
         seen_commands.add(family)
     choices = []
+    pool = auto_pool(config, task)
     preferred = config.get("sidekick", "codex")
     candidates = [(name, name, None) for name in dict.fromkeys([preferred, "codex", "claude", "agy", "grok"])]
     candidates += [(name, settings.get("agent"), name) for name, settings in config.get("routes", {}).items()]
     if task.get("prefer_different_agent"):
         candidates.sort(key=lambda item: item[1] == task["prefer_different_agent"])
     for key, agent, route in candidates:
+        if pool is not None and key not in pool:
+            drop(key, "not in decisions.auto_routes")
+            continue
         if key in unhealthy:
             drop(key, "a recent run on this lane hit a quota or permission limit")
             continue
@@ -378,6 +382,23 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
                             "session_idle_s": lane_idle, "warm": lane_idle is not None and lane_idle * 1000 < ttl_ms,
                             "mean_ms": sum(s.get("duration_ms", 0) for s in spans) / len(spans) if spans else None})
     return rank_by_quota(choices)
+
+
+AGENTS = ("codex", "claude", "agy", "grok")
+
+
+def auto_pool(config, task):
+    """The lanes automatic routing may choose, or None for every lane.
+
+    `decisions.auto_routes` names routes (or bare agents); it binds automatic
+    choices only, never a lane the task named itself."""
+    pool = (config.get("decisions") or {}).get("auto_routes")
+    if pool is None or task.get("agent", "auto") != "auto" or task.get("route"):
+        return None
+    known = set(config.get("routes", {})) | set(AGENTS)
+    if not isinstance(pool, list) or not pool or not all(isinstance(name, str) and name in known for name in pool):
+        raise ValueError("decisions.auto_routes must be a non-empty list of configured route or agent names")
+    return set(pool)
 
 
 def no_route_reason(config, task, store):

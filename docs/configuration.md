@@ -84,6 +84,16 @@ It defines evidence tiers only when a cost is configured and no cache
 configuration supplies `warm_epsilon`. Costs never override clearly better
 evidence or change unproven-lane exploration. See [cost tie-breakers](routing.md#cost-tie-breakers).
 
+`decisions.auto_routes` limits which lanes `--agent auto` may choose. It is a
+non-empty list of named routes or bare agents (`claude`, `codex`, `agy`,
+`grok`); every other lane is dropped from automatic candidacy with the reason
+`not in decisions.auto_routes`. It never binds a task that names its own agent
+or route. Unset, every configured lane is a candidate.
+
+```json
+{"decisions": {"auto_routes": ["claude-opus-medium", "claude-opus-high", "codex-astra-medium", "codex-astra-high"]}}
+```
+
 ## Control workspace
 
 To collect evidence from several checkouts in one controller directory:

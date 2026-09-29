@@ -91,6 +91,14 @@ the effective `cost_epsilon` when cost ranking applies. `fusion decisions
 routing-report` includes `routing_policies` with each decision's policy and
 candidate cost tiers, even before an outcome exists.
 
+### Automatic pool
+
+`decisions.auto_routes` bounds automatic routing to the named lanes before any
+ranking: evidence, cost, warmth and quota only order lanes inside the pool.
+Use it to keep cheap or unproven lanes out of work that ships while still
+letting `auto` pick model and effort among the lanes you trust. See
+[configuration](configuration.md).
+
 ## Accounts and quota headroom
 
 Named routes in `.fusion.json` can set `env` to an object of string environment
