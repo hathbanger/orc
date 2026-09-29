@@ -164,6 +164,22 @@ Explicit legacy `sandbox_mode` settings in Codex config take precedence over nam
 profiles; remove those settings to use this scoped profile. Already-running workers
 keep the permissions they started with; new launches and resumed workers use the update.
 
+Codex writers have no network by default, which also blocks a server the
+worker starts on 127.0.0.1. `codex.network` (on the agent or a route) adds a
+network table to the `fusion_git_write` profile using Codex's own
+permission-profile keys. Read-only runs and `git_write: false` ignore it.
+When `mode` is `"limited"`, ORC also sets `features.network_proxy=true`:
+Codex enforces the `domains` allowlist only through that proxy.
+
+```json
+{"codex": {"network": {"enabled": true, "allow_local_binding": true, "mode": "limited",
+                       "domains": {"pypi.org": "allow", "files.pythonhosted.org": "allow", "registry.npmjs.org": "allow"}}}}
+```
+
+On macOS, `allow_local_binding` opens every localhost port, including other
+services on the host, not just the worker's own server; Codex offers no
+per-port rule. `ps` stays denied inside the sandbox.
+
 ## Antigravity settings
 
 In restricted mode, Fusion launches `agy` with `--sandbox` and uses `plan` for

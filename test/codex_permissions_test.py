@@ -33,6 +33,27 @@ class CodexPermissionsTest(unittest.TestCase):
             argv, _, _ = core.agent_command(config, task, None)
             self.assertEqual(argv[argv.index("-s") + 1], "workspace-write")
 
+    def test_network_table_reaches_the_writer_profile_and_limited_mode_starts_the_proxy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            network = {"enabled": True, "allow_local_binding": True, "mode": "limited",
+                       "domains": {"pypi.org": "allow", "*.npmjs.org": "allow"}}
+            args = core.codex_permission_args(Path(directory), {**core.DEFAULTS["codex"], "network": network}, True)
+            profile = next(arg for arg in args if arg.startswith("permissions.fusion_git_write="))
+            self.assertIn(',network={"enabled"=true,"allow_local_binding"=true,"mode"="limited",'
+                          '"domains"={"pypi.org"="allow","*.npmjs.org"="allow"}}}', profile)
+            self.assertEqual(args[args.index("features.network_proxy=true") - 1], "-c")
+            unlimited = core.codex_permission_args(Path(directory), {**core.DEFAULTS["codex"], "network": {"enabled": True}}, True)
+            self.assertNotIn("features.network_proxy=true", unlimited)
+            reader = core.codex_permission_args(Path(directory), {**core.DEFAULTS["codex"], "network": network}, False)
+            self.assertEqual(reader, ["-s", "read-only"])
+            with self.assertRaisesRegex(ValueError, "codex.network"):
+                core.codex_permission_args(Path(directory), {**core.DEFAULTS["codex"], "network": "on"}, True)
+
+    def test_default_writer_profile_has_no_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = core.codex_permission_args(Path(directory), core.DEFAULTS["codex"], True)
+            self.assertFalse(any("network" in arg for arg in args))
+
     @unittest.skipUnless(sys.platform == "darwin" and shutil.which("codex"), "requires the macOS Codex sandbox")
     def test_real_sandbox_allows_git_in_repos_and_worktrees_but_protects_other_paths(self):
         help_text = subprocess.run(["codex", "sandbox", "--help"], capture_output=True, text=True, timeout=10).stdout

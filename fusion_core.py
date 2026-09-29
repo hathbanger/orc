@@ -1616,8 +1616,37 @@ def fitted_orc_models(command: str, selector: str, limit: int,
     return [candidate for candidate in ranked if candidate in fit_ids][:max(0, limit)]
 
 
+def toml_inline(value: Any) -> str:
+    """A JSON-shaped value as a TOML inline value, for Codex `-c` overrides."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)) or isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, list):
+        return "[" + ",".join(toml_inline(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ",".join(f"{json.dumps(str(key))}={toml_inline(item)}" for key, item in value.items()) + "}"
+    raise ValueError(f"cannot express {type(value).__name__} in a Codex config override")
+
+
+def codex_network(settings: dict[str, Any]) -> tuple[str, list[str]]:
+    """The writer profile's optional `network` table and the flags it needs.
+
+    Codex enforces `mode = "limited"` domain rules only through its managed
+    proxy, which is off unless `features.network_proxy` is set; without it the
+    sandbox allows direct connections to any host."""
+    network = settings.get("network")
+    if network is None:
+        return "", []
+    if not isinstance(network, dict):
+        raise ValueError("codex.network must be a table of Codex permission-profile network settings")
+    return ",network=" + toml_inline(network), (["-c", "features.network_proxy=true"] if network.get("mode") == "limited" else [])
+
+
 def codex_permission_args(workspace: Path, settings: dict[str, Any], write: bool) -> list[str]:
-    """Allow repository Git operations for writers without unrestricted access."""
+    """Allow repository Git operations for writers without unrestricted access.
+    An optional `network` table (Codex's permission-profile keys) applies to
+    writers only; readers stay read-only with no network."""
     sandbox = settings.get("sandbox", "workspace-write") if write else "read-only"
     if sandbox != "workspace-write" or not settings.get("git_write", True):
         return ["-s", sandbox]
@@ -1635,8 +1664,9 @@ def codex_permission_args(workspace: Path, settings: dict[str, Any], write: bool
         pass  # A new, non-Git workspace may still initialize its own .git.
     paths = [json.dumps(path) + '="write"' for path in sorted(roots)]
     filesystem = ','.join(['":workspace_roots"={".git"="write"}', *paths])
-    profile = '{extends=":workspace",filesystem={' + filesystem + '}}'
-    return ["--strict-config", "-c", 'default_permissions="fusion_git_write"',
+    network, flags = codex_network(settings)
+    profile = '{extends=":workspace",filesystem={' + filesystem + '}' + network + '}'
+    return ["--strict-config", *flags, "-c", 'default_permissions="fusion_git_write"',
             "-c", "permissions.fusion_git_write=" + profile]
 
 
