@@ -274,7 +274,7 @@ def headroom(workspace=None, *, codex_home=None, include_raw=True):
     accounts = {}
 
     def observe(provider, account, windows, when, source):
-        names = ("primary", "secondary") if provider == "codex" else ("five_hour", "seven_day")
+        names = ("primary", "secondary") if provider == "codex" else ("five_hour", "seven_day", "spend")
         key = (provider, account)
         entry = accounts.setdefault(key, {"provider": provider, "account": account,
                                           "windows": dict.fromkeys(names, None)})

@@ -133,6 +133,13 @@ outside the worktree. Route settings that keep the lane bounded:
 - `max_budget_usd`: the per-run cap Claude Code enforces.
 - `account`: a separate account keeps its quota and cooldowns apart from the subscription.
 
+An API key cannot read its workspace spend limit; it learns about it only when
+a request is refused ("You have reached your specified workspace API usage
+limits. You will regain access on … UTC"). Fusion records that refusal as a
+rejected `spend` window on the lane's account with the stated reset, so the
+account is excluded until then (not retried every cooldown) and `fusion usage`
+shows it beside the subscription windows.
+
 `decisions.overflow_routes` lists automatic lanes that are candidates only when
 no other pooled lane is (for example the subscription lanes are over the quota
 hard limit or cooling down). Routing returns to the primary lanes as soon as

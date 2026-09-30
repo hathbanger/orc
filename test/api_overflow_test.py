@@ -92,5 +92,40 @@ class ApiOverflowTest(unittest.TestCase):
         self.assertTrue(any(b.startswith("billing: a subscription lane ran on ANTHROPIC_API_KEY") for b in result["blockers"]))
 
 
+    def test_a_workspace_spend_limit_excludes_the_account_until_its_reset(self):
+        import fusion_usage as usage
+        self.key.write_text("k")
+        worker = self.root / "claude-api-fixture"
+        message = ("API Error: 400 You have reached your specified workspace API usage limits. "
+                   "You will regain access on 2999-01-01 at 00:00 UTC.")
+        worker.write_text(f"#!{sys.executable}\nimport json\n"
+                          "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'apiKeyHelper'}))\n"
+                          f"print(json.dumps({{'type':'result','subtype':'success','is_error':True,'session_id':'s','result':{message!r}}}))\n")
+        worker.chmod(0o755)
+        self.config["routes"]["api"]["command"] = str(worker)
+        task = core.make_task(self.workspace, "claude", "x", "implementation", [], [], None, False, True, route="api")
+        result = core.dispatch(self.config, task, self.store)
+        self.assertEqual(result["quota"], {"status": "rejected", "windows": {"spend": {"used": 1.0, "resets_at": 32472144000.0}}})
+        entry = next(h for h in usage.headroom(self.workspace) if h["account"] == "claude@anthropic-api")
+        self.assertEqual(entry["windows"]["spend"]["utilization"], 1.0)
+        # Days later the cooldown has long expired, but the account stays out until the stated reset.
+        later = core.now_ms() + 3 * 86400 * 1000
+        subscription_out = {"agent": "claude", "route": "sub", "failure_class": "quota", "end_time_ms": later}
+        rejected = {}
+        with patch.object(core, "now_ms", return_value=later), patch("time.time", return_value=later / 1000):
+            task = core.make_task(self.workspace, "auto", "Fix it", "implementation", [], [], None, False, True)
+            traces = self.store.traces(limit=200) + [subscription_out]
+            with patch.object(self.store, "traces", return_value=traces):
+                keys = {c["key"] for c in route_candidates(self.config, task, self.store, rejected=rejected)}
+        self.assertEqual(keys, set())
+        self.assertIn("spend: rejected until", rejected["api"])
+
+    def test_spend_limit_text_is_parsed_only_from_the_api_message(self):
+        self.assertIsNone(core.api_spend_limit("rate limit reached, try later"))
+        self.assertEqual(core.api_spend_limit("You have reached your specified workspace API usage limits. "
+                                              "You will regain access on 2026-10-01 at 00:00 UTC.")["windows"]["spend"]["resets_at"],
+                         1790812800.0)
+
+
 if __name__ == "__main__":
     unittest.main()

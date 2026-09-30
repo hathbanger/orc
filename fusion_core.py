@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 from contextvars import ContextVar
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -1549,6 +1550,21 @@ def metered(settings: dict[str, Any]) -> bool:
     return billing == "api"
 
 
+SPEND_LIMIT_RE = re.compile(r"workspace API usage limits?.*?regain access on (\d{4}-\d{2}-\d{2}) at (\d{1,2}:\d{2}) UTC", re.IGNORECASE | re.DOTALL)
+
+
+def api_spend_limit(text: str) -> dict[str, Any] | None:
+    """An Anthropic workspace spend limit, which API keys see only when they hit it.
+
+    Recorded as a rejected `spend` window that resets when the API says, so the
+    account is excluded until then instead of retried every cooldown."""
+    match = SPEND_LIMIT_RE.search(text or "")
+    if not match:
+        return None
+    reset = datetime.strptime(f"{match.group(1)} {match.group(2)}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    return {"status": "rejected", "windows": {"spend": {"used": 1.0, "resets_at": reset.timestamp()}}}
+
+
 def claude_key_source(stdout: str) -> str | None:
     """Claude Code's own report of which credential a run used (init event apiKeySource)."""
     for line in stdout.splitlines():
@@ -2151,6 +2167,8 @@ def dispatch(
     }
     ended_at_ms = now_ms()
     quota = parse_quota(task["agent"], worker_stdout)
+    if quota is None and task["agent"] == "claude":
+        quota = api_spend_limit(" ".join([*(str(b) for b in blockers), str(result.get("summary") or "")]))
     if quota is None and task["agent"] == "codex":
         quota = codex_rollout_quota(session_id_seen, env)
     if quota is not None:
