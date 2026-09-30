@@ -358,6 +358,17 @@ def headroom(workspace=None, *, codex_home=None, include_raw=True):
                 when = timestamp(record.get("timestamp")) or timestamp(event.get("ts")) or fallback or file_time(path)
                 observe("claude", account_identity(info, record, event) or account, windows, when, path)
     for provider in ("codex", "claude"):
+        # Rollouts carry no account id. With exactly one identified account for
+        # the provider they are that account's windows: one account, one row.
+        named = [key for key in accounts if key[0] == provider and key[1] is not None]
+        if (provider, None) in accounts and len(named) == 1:
+            loose = accounts.pop((provider, None))
+            target = accounts[named[0]]
+            for name, window in loose["windows"].items():
+                old = target["windows"].get(name)
+                if window and (not old or timestamp(old["observed_at"]) < timestamp(window["observed_at"])):
+                    target["windows"][name] = window
+    for provider in ("codex", "claude"):
         if not any(key[0] == provider for key in accounts):
             observe(provider, None, {}, datetime.now(UTC), "")
     output = []

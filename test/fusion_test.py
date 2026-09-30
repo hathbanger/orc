@@ -1174,6 +1174,11 @@ print(json.dumps({{'type':'turn.completed','usage':{{}}}}))
         argv = json.loads(argv_log.read_text().splitlines()[-1])
         self.assertIn('model_reasoning_effort="high"', argv)
         self.assertEqual(argv[argv.index("-m") + 1], "gpt-cli")
+        span = json.loads((self.workspace / ".fusion" / "traces.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(span["reasoning_effort"], "high")
+        run_dir = Path(span["artifacts"]["run_dir"])
+        self.assertEqual(json.loads((run_dir / "result.json").read_text())["reasoning_effort"], "high")
+        self.assertEqual(json.loads((run_dir / "task.json").read_text())["resolved"]["reasoning_effort"], "high")
 
     def test_ultra_pipeline_keeps_stage_artifacts_and_stops_at_limit(self):
         claude = self.write_agent(

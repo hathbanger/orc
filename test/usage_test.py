@@ -231,6 +231,18 @@ class UsageTest(unittest.TestCase):
         self.assertIn(('claude', 'claude@work'), accounts)
         self.assertIn(('codex', None), accounts)
 
+    def test_unidentified_rollout_windows_join_the_only_identified_account(self):
+        run = self.workspace / '.fusion' / 'runs' / 'worker'
+        run.mkdir(parents=True)
+        (run / 'trace.json').write_text(json.dumps({
+            'agent': 'codex', 'lane_key': 'codex', 'end_time_ms': int((NOW - timedelta(hours=2)).timestamp() * 1000),
+            'quota': {'windows': {'primary': {'used': .5, 'resets_at': 200}}}}))
+        self.write(self.codex / 'sessions' / 'r.jsonl', [{'timestamp': usage.iso(NOW - timedelta(hours=1)), 'type': 'event_msg',
+                   'payload': {'type': 'token_count', 'rate_limits': {'primary': {'used_percent': 100, 'resets_at': 300}}}}])
+        codex = [a for a in usage.headroom(self.workspace) if a['provider'] == 'codex']
+        self.assertEqual([a['account'] for a in codex], ['codex'])
+        self.assertEqual(codex[0]['windows']['primary']['used_percent'], 100)
+
     def snapshot_files(self):
         return {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
 

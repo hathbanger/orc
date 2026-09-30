@@ -1035,6 +1035,7 @@ class RunStore:
             "role": task["role"],
             "route": task.get("route"),
             "model": metadata.get("model"),
+            "reasoning_effort": metadata.get("reasoning_effort"),
             "write": task.get("write", False),
             "execution_choice": result.get("execution_choice"),
             "usage": result.get("usage") or {},
@@ -1926,7 +1927,10 @@ def dispatch(
     if store.control_workspace is not None:
         env["FUSION_CONTROL_WORKSPACE"] = str(store.control_workspace)
     metadata["execution_mode"] = execution_mode(config)
-    metadata["lane_key"] = lane_key(task["agent"], agent_settings(config, task))
+    resolved_settings = agent_settings(config, task)
+    metadata["lane_key"] = lane_key(task["agent"], resolved_settings)
+    # The requested effort, from the task, route or agent; null means the harness default.
+    metadata["reasoning_effort"] = resolved_settings.get("reasoning_effort")
     task["resolved"] = metadata
     store.write_json(run_dir / "task.json", task)
     binary = executable(argv[0])
@@ -2082,6 +2086,7 @@ def dispatch(
         "role": task["role"],
         "route": task.get("route"),
         "model": model,
+        "reasoning_effort": metadata.get("reasoning_effort"),
         "execution_choice": metadata.get("execution_choice"),
         "summary": compact(str(handoff.get("summary") or summary).strip(), int(config.get("max_result_chars", 12000))),
         "changed": handoff.get("changed", []),
