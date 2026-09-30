@@ -117,6 +117,23 @@ class PermissionCooldownRoutingTest(unittest.TestCase):
     def test_quota_cools_the_lane_down(self):
         self.assertNotIn("claude", self.agents({"failure_class": "quota", "denied_tools": []}))
 
+    def routes(self, span):
+        self.config["routes"] = {"opus-high": {"agent": "claude", "model": "claude-opus-5-5"},
+                                 "opus-medium": {"agent": "claude", "model": "claude-opus-5-5"}}
+        span = {"agent": "claude", "route": "opus-high", "execution_mode": "yolo", "end_time_ms": core.now_ms(), **span}
+        task = core.make_task(self.workspace, "auto", "Check the fixture", "review", [], [], None, True, False)
+        with patch.object(self.store, "traces", return_value=[span]):
+            return {choice["key"] for choice in route_candidates(self.config, task, self.store)}
+
+    def test_a_permission_denial_cools_only_its_own_lane(self):
+        keys = self.routes({"failure_class": "permission_denied", "denied_tools": ["Read"]})
+        self.assertNotIn("opus-high", keys)
+        self.assertIn("opus-medium", keys)
+
+    def test_quota_cools_every_lane_on_the_same_account(self):
+        keys = self.routes({"failure_class": "quota", "denied_tools": []})
+        self.assertFalse({"opus-high", "opus-medium"} & keys)
+
     def test_legacy_span_without_denied_tools_keeps_the_cooldown(self):
         self.assertNotIn("claude", self.agents({"failure_class": "permission_denied"}))
 

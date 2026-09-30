@@ -75,8 +75,8 @@ it. Interactive lead sessions use their own provider controls.
    unknown. ORC candidates require passing tool-fit evidence; read-only
    routes cannot become writers. A lane whose latest run in the last 15
    minutes hit a quota limit cools down, and equivalent native lanes with
-   it. A permission denial in the current execution mode does the same only
-   when a denied tool is one every task needs: read, edit, write, list or
+   it (one account). A permission denial in the current execution mode cools
+   down that lane alone, and only when a denied tool is one every task needs: read, edit, write, list or
    search (`BASELINE_TOOLS` in `fusion_core.py`: `Read`, `Edit`, `Write`,
    `MultiEdit`, `Glob`, `Grep`, `LS`, agy's `ViewFile`/`ListDir`/...;
    matched case- and punctuation-insensitively). Denying anything else,

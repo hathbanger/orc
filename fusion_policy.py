@@ -236,7 +236,11 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
                                                         and span.get("execution_mode", "restricted") == core.execution_mode(config)
                                                         and core.denial_blocks_lane(span)):
                 unhealthy.add(key)
-                if family not in seen_commands and (Path(str(family[1])).name != "orc" or core.route_account(settings)):
+                # Quota belongs to the account behind the command, so every lane on
+                # it cools down. A permission denial is about what that lane's run
+                # tried; other lanes on the same command stay candidates.
+                if span.get("failure_class") == "quota" and family not in seen_commands \
+                        and (Path(str(family[1])).name != "orc" or core.route_account(settings)):
                     unavailable_commands.add(family)
         seen.add(key)
         seen_commands.add(family)

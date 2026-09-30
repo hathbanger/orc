@@ -100,17 +100,23 @@ class RouteEnvTest(unittest.TestCase):
                     "second": {"agent": agent, **identity},
                     "alias": {"agent": agent, **identity},
                 }
-                for failure in ("quota", "permission_denied"):
-                    span = {"agent": agent, "failure_class": failure, "end_time_ms": core.now_ms(),
-                            "denied_tools": ["Read"]}
-                    native = self.candidates([span])
-                    self.assertNotIn(agent, native)
-                    self.assertNotIn("plain", native)
-                    self.assertTrue({"second", "alias"} <= native)
-                    second = self.candidates([{**span, "route": "second"}])
-                    self.assertTrue({agent, "plain"} <= second)
-                    self.assertNotIn("second", second)
-                    self.assertNotIn("alias", second)
+                span = {"agent": agent, "failure_class": "quota", "end_time_ms": core.now_ms(), "denied_tools": ["Read"]}
+                native = self.candidates([span])
+                self.assertNotIn(agent, native)
+                self.assertNotIn("plain", native)
+                self.assertTrue({"second", "alias"} <= native)
+                second = self.candidates([{**span, "route": "second"}])
+                self.assertTrue({agent, "plain"} <= second)
+                self.assertNotIn("second", second)
+                self.assertNotIn("alias", second)
+                # A permission denial cools only the lane whose run was denied.
+                denied = {**span, "failure_class": "permission_denied"}
+                native = self.candidates([denied])
+                self.assertNotIn(agent, native)
+                self.assertTrue({"plain", "second", "alias"} <= native)
+                second = self.candidates([{**denied, "route": "second"}])
+                self.assertNotIn("second", second)
+                self.assertTrue({agent, "plain", "alias"} <= second)
                 self.assertIn("second", self.candidates(excluded=[agent]))
                 excluded = self.candidates(excluded=["second"])
                 self.assertIn(agent, excluded)
