@@ -241,7 +241,7 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         agent = lane.get("agent", excluded)
         settings = core.deep_merge(config.get(agent, {}), lane)
         if Path(str(settings.get("command", agent))).name != "orc" or core.route_account(settings):
-            unavailable_commands.add((core.lane_key(agent, settings), settings.get("command", agent)))
+            unavailable_commands.add((core.lane_key(agent, settings), settings.get("command", agent), settings.get("model") or "*"))
     seen = set()
     seen_commands = set()
     untrusted = set()
@@ -255,7 +255,10 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         agent = span.get("agent")
         lane = config.get("routes", {}).get(span.get("route"), {})
         settings = core.deep_merge(config.get(agent, {}), lane)
-        family = (core.lane_key(agent, settings), settings.get("command", agent))
+        # Quota is per account, and a plan may cap one model (Fable) while
+        # another (Opus) still has room: a failure cools lanes on the same
+        # account and model, or the whole account when the model is unknown.
+        family = (core.lane_key(agent, settings), settings.get("command", agent), settings.get("model") or span.get("model") or "*")
         if key not in seen and 0 <= time.time() * 1000 - span.get("end_time_ms", 0) < core.LANE_COOLDOWN_SECONDS * 1000:
             if span.get("failure_class") == "quota" or (span.get("failure_class") == "permission_denied"
                                                         and span.get("execution_mode", "restricted") == core.execution_mode(config)
@@ -316,7 +319,8 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
             except ValueError as exc:
                 drop(key, str(exc))
                 continue
-        if (core.lane_key(agent, settings), settings.get("command", agent)) in unavailable_commands:
+        base = (core.lane_key(agent, settings), settings.get("command", agent))
+        if (*base, settings.get("model") or "*") in unavailable_commands or (*base, "*") in unavailable_commands:
             drop(key, f"{settings.get('command', agent)} is already known to be unavailable this run")
             continue
         missing = [path for path in settings.get("requires") or [] if not Path(os.path.expanduser(str(path))).exists()]

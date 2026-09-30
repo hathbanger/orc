@@ -134,6 +134,19 @@ class PermissionCooldownRoutingTest(unittest.TestCase):
         keys = self.routes({"failure_class": "quota", "denied_tools": []})
         self.assertFalse({"opus-high", "opus-medium"} & keys)
 
+    def test_a_model_quota_leaves_other_models_on_the_account(self):
+        self.config["routes"] = {"fable-xhigh": {"agent": "claude", "model": "claude-fable-5-1"},
+                                 "fable-high": {"agent": "claude", "model": "claude-fable-5-1"},
+                                 "opus-high": {"agent": "claude", "model": "claude-opus-5-5"}}
+        span = {"agent": "claude", "route": "fable-xhigh", "failure_class": "quota", "execution_mode": "yolo",
+                "end_time_ms": core.now_ms()}
+        task = core.make_task(self.workspace, "auto", "Check the fixture", "review", [], [], None, True, False)
+        with patch.object(self.store, "traces", return_value=[span]):
+            keys = {choice["key"] for choice in route_candidates(self.config, task, self.store)}
+        self.assertNotIn("fable-xhigh", keys)
+        self.assertNotIn("fable-high", keys)
+        self.assertIn("opus-high", keys)
+
     def test_legacy_span_without_denied_tools_keeps_the_cooldown(self):
         self.assertNotIn("claude", self.agents({"failure_class": "permission_denied"}))
 
