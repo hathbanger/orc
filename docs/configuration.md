@@ -120,9 +120,12 @@ subscription lane that still ran on a key gets a `billing:` blocker.
 `fusion doctor` warns when either variable is set in the current shell,
 because interactive sessions started from it bill the key too.
 
-A metered lane should load its key itself, for example with a `command`
-wrapper that reads a mode-600 file and `exec`s `claude`, so the key never sits
-in a profile. Route settings that keep it bounded:
+A metered lane should get its key from Claude Code's `apiKeyHelper` setting
+in a settings file only that lane passes (`launcher_args: ["--settings", ...]`):
+Claude runs the helper itself, so the key never enters any environment its
+Bash commands or child processes can read, and Claude reports
+`apiKeySource: "apiKeyHelper"`. Keep the helper and key file mode 700/600 and
+outside the worktree. Route settings that keep the lane bounded:
 
 - `requires`: paths that must exist before the lane is a candidate (the key file).
 - `daily_budget_usd`: the lane stops being a candidate once its runs reported
@@ -138,7 +141,8 @@ one is available again.
 ```json
 {"decisions": {"auto_routes": ["claude-opus-medium", "claude-api-opus-medium"], "overflow_routes": ["claude-api-opus-medium"]},
  "routes": {"claude-api-opus-medium": {"agent": "claude", "model": "claude-opus-5-5", "reasoning_effort": "medium",
-   "billing": "api", "account": "anthropic-api", "command": "/Users/you/.local/bin/claude-api",
+   "billing": "api", "account": "anthropic-api",
+   "launcher_args": ["--settings", "/Users/you/.config/orc/claude-api-settings.json"],
    "requires": ["~/.config/orc/anthropic-api-key"], "daily_budget_usd": 150, "max_budget_usd": 15}}}
 ```
 
