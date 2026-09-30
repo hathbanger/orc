@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 import json
 import math
+import os
 from pathlib import Path
 import random
 import time
@@ -184,6 +185,30 @@ def role_prior_class(work, role):
     return "interpret" if work == "read" and role and "interpret" in role else work
 
 
+def spent_last_day(store, key):
+    """Reported USD of this route's runs that ended in the last 24 hours."""
+    since = time.time() * 1000 - 86400 * 1000
+    total = 0.0
+    for span in store.traces(limit=5000):
+        if (span.get("route") or span.get("agent")) == key and (span.get("end_time_ms") or 0) >= since:
+            cost = (span.get("usage") or {}).get("cost_usd")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                total += cost
+    return total
+
+
+def overflow_only(config, choices, drop):
+    """`decisions.overflow_routes` are candidates only when no other lane is:
+    they carry automatic work when the primary lanes are excluded or cooling down."""
+    overflow = set((config.get("decisions") or {}).get("overflow_routes") or [])
+    if not overflow or not any(c["route"] not in overflow for c in choices):
+        return choices
+    for c in choices:
+        if c["route"] in overflow:
+            drop(c["key"], "overflow lane: used only when no primary lane is available")
+    return [c for c in choices if c["route"] not in overflow]
+
+
 def route_candidates(config, task, store, rejected=None, quota_audit=None, minimum=None):
     """Pass `rejected` to collect why each lane was dropped. The reasons live
     beside the checks that produce them so an explanation can never drift from
@@ -294,6 +319,16 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         if (core.lane_key(agent, settings), settings.get("command", agent)) in unavailable_commands:
             drop(key, f"{settings.get('command', agent)} is already known to be unavailable this run")
             continue
+        missing = [path for path in settings.get("requires") or [] if not Path(os.path.expanduser(str(path))).exists()]
+        if missing:
+            drop(key, "requires " + ", ".join(str(path) for path in missing))
+            continue
+        budget = settings.get("daily_budget_usd")
+        if budget is not None:
+            spent = spent_last_day(store, key)
+            if spent >= float(budget):
+                drop(key, f"spent ${spent:.2f} of its ${float(budget):.2f} daily budget in the last 24 hours")
+                continue
         if not core.executable(settings.get("command", agent)):
             drop(key, f"{settings.get('command', agent)} is not on PATH")
             continue
@@ -394,7 +429,7 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
                             "mean_cost_usd_cold": sum(split_costs[False]) / len(split_costs[False]) if split_costs[False] else None,
                             "session_idle_s": lane_idle, "warm": lane_idle is not None and lane_idle * 1000 < ttl_ms,
                             "mean_ms": sum(s.get("duration_ms", 0) for s in spans) / len(spans) if spans else None})
-    return rank_by_quota(choices)
+    return rank_by_quota(overflow_only(config, choices, drop) if automatic else choices)
 
 
 AGENTS = ("codex", "claude", "agy", "grok")

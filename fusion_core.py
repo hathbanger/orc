@@ -1538,6 +1538,30 @@ def route_env(settings: dict[str, Any]) -> dict[str, str]:
     return {key: os.path.expanduser(os.path.expandvars(value)) for key, value in env.items()}
 
 
+METERED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def metered(settings: dict[str, Any]) -> bool:
+    """A lane that bills per token instead of a subscription login."""
+    billing = settings.get("billing")
+    if billing not in (None, "subscription", "api"):
+        raise ValueError('billing must be "subscription" or "api"')
+    return billing == "api"
+
+
+def claude_key_source(stdout: str) -> str | None:
+    """Claude Code's own report of which credential a run used (init event apiKeySource)."""
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+            source = event.get("apiKeySource")
+            return source if isinstance(source, str) else None
+    return None
+
+
 def route_account(settings: dict[str, Any]) -> str:
     account = settings.get("account")
     if account is not None:
@@ -1682,7 +1706,17 @@ def agent_command(
         raise ValueError("reasoning_effort is currently supported only for native Codex, Claude Code and agy")
     yolo = execution_mode(config) == "yolo"
     env = os.environ.copy()
-    env.update(route_env(settings))
+    if agent == "claude" and not metered(settings):
+        # Claude Code prefers an API key over the subscription login whenever one
+        # is in its environment. Only a lane declared `billing: "api"` may inherit
+        # or set one; every other lane runs on the login even if a key leaked
+        # into the parent shell.
+        for name in METERED_ENV:
+            env.pop(name, None)
+    routed = route_env(settings)
+    if agent == "claude" and not metered(settings):
+        routed = {k: v for k, v in routed.items() if k not in METERED_ENV}
+    env.update(routed)
     if agent == "codex":
         from fusion_reasoning import execution_choice
         choice = execution_choice(settings)
@@ -2067,6 +2101,7 @@ def dispatch(
     duration_ms = int((time.monotonic() - started) * 1000)
     progress.emit(label, f"worker {status} after {progress.elapsed(duration_ms / 1000)}; exit {exit_code}")
     denied = provider_denials(task["agent"], worker_stdout)
+    key_source = claude_key_source(worker_stdout) if task["agent"] == "claude" else None
     denied_tools = normalize_tools(item["tool"] for item in denied) or blocker_denied_tools(evidence_notes if task["agent"] != "codex" else [])
     # A worker that was denied only non-baseline tools (a Bash command outside its
     # allowlist) and still exited 0 with a handoff worked around the denial: that
@@ -2076,6 +2111,8 @@ def dispatch(
             and evidence_notes and not denial_blocks_lane({"denied_tools": denied_tools})):
         status = "blocked" if handoff.get("reported_status") == "blocked" else "partial"
     blockers = handoff.get("blockers", []) + (evidence_notes if task["agent"] != "codex" else []) + ([failure] if failure else [])
+    if key_source not in (None, "none") and not metered(agent_settings(config, task)):
+        blockers.append(f"billing: a subscription lane ran on {key_source} (metered); declare billing: \"api\" on lanes meant to bill per token")
     result = {
         "schema": SCHEMA,
         "run_id": task["run_id"],
@@ -2087,6 +2124,7 @@ def dispatch(
         "route": task.get("route"),
         "model": model,
         "reasoning_effort": metadata.get("reasoning_effort"),
+        **({"api_key_source": key_source} if key_source is not None else {}),
         "execution_choice": metadata.get("execution_choice"),
         "summary": compact(str(handoff.get("summary") or summary).strip(), int(config.get("max_result_chars", 12000))),
         "changed": handoff.get("changed", []),
@@ -2674,7 +2712,11 @@ def doctor(workspace: Path, config: dict[str, Any]) -> int:
                 **({"error": "command is not executable"} if not path else {}),
             }
         )
-    payload = {"workspace": str(workspace), "config": redact(config), "checks": checks, "route_checks": route_checks}
+    warnings = [f"{name} is set in this shell: Claude Code sessions started from it (including leads) bill the API key instead of the "
+                "subscription; keep keys out of shell profiles and give them only to billing: \"api\" lanes"
+                for name in METERED_ENV if os.environ.get(name)]
+    payload = {"workspace": str(workspace), "config": redact(config), "checks": checks, "route_checks": route_checks,
+               **({"warnings": warnings} if warnings else {})}
     print(json_text(payload))
     return 0 if all(item["ok"] for item in checks if item["required"]) and all(item["ok"] for item in route_checks) else 1
 

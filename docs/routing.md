@@ -106,6 +106,14 @@ routing drops lanes whose config `lacks` one before ranking; if that leaves
 none, it routes on the full pool and logs `needs_unmet`. The routing log
 records `needs` for every such choice. See [configuration](configuration.md).
 
+### Overflow lanes
+
+`decisions.overflow_routes` are dropped from automatic candidacy while any
+other pooled lane survives the filters, and become the candidates when none
+does. Use them for a metered API lane behind a subscription: quota exclusion
+or a quota cooldown on the subscription moves work there, and the next choice
+after the subscription resets goes back. See [configuration](configuration.md#metered-lanes-and-overflow).
+
 ## Accounts and quota headroom
 
 Named routes in `.fusion.json` can set `env` to an object of string environment
