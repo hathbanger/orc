@@ -1427,6 +1427,35 @@ def codex_rollout_quota(session_id: str | None, env: dict[str, str]) -> dict[str
     return parse_quota("codex", tail)
 
 
+CLAUDE_SESSION_TOKENS = {
+    "inputTokens": "input_tokens",
+    "outputTokens": "output_tokens",
+    "cacheReadInputTokens": "cache_read_input_tokens",
+    "cacheCreationInputTokens": "cache_creation_input_tokens",
+}
+
+
+def claude_session_tokens(model_usage: Any) -> dict[str, int]:
+    """Token totals for the whole session, summed over models.
+
+    A session that wakes for background work emits one result per wake. Each
+    result's `usage` covers only its own turns, while `total_cost_usd` and
+    `modelUsage` are cumulative, so tokens come from `modelUsage` to match
+    the cost recorded beside them.
+    """
+    if not isinstance(model_usage, dict):
+        return {}
+    totals: dict[str, int] = {}
+    for entry in model_usage.values():
+        if not isinstance(entry, dict):
+            continue
+        for source, target in CLAUDE_SESSION_TOKENS.items():
+            count = entry.get(source)
+            if isinstance(count, int) and not isinstance(count, bool):
+                totals[target] = totals.get(target, 0) + count
+    return totals
+
+
 def parse_claude_output(stdout: str) -> tuple[str | None, str, str | None, dict[str, Any], str | None, list[str]]:
     value = claude_result(stdout)
     if not isinstance(value, dict):
@@ -1441,6 +1470,7 @@ def parse_claude_output(stdout: str) -> tuple[str | None, str, str | None, dict[
     # or synthetic output that already sets these directly is left alone.
     if "cost_usd" not in usage and "cost" not in usage and value.get("total_cost_usd") is not None:
         usage["cost_usd"] = value["total_cost_usd"]
+    usage.update(claude_session_tokens(value.get("modelUsage")))
     model = value.get("model") or value.get("model_id")
     if not model:
         model_usage = value.get("modelUsage")

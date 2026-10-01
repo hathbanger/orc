@@ -60,6 +60,22 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(core.parse_claude_output(stream), core.parse_claude_output(legacy))
         self.assertEqual(core.provider_denials('claude', stream), core.provider_denials('claude', legacy))
 
+    def test_tokens_cover_the_whole_session_like_the_cost(self):
+        # A session that wakes for background work emits a result per wake;
+        # the last one's usage covers one short turn, its cost the whole run.
+        def result(turn_out, total_out, cache_read, cost):
+            return {'type': 'result', 'session_id': 's', 'result': 'done', 'total_cost_usd': cost,
+                    'usage': {'input_tokens': 4, 'output_tokens': turn_out, 'cache_read_input_tokens': 251099},
+                    'modelUsage': {'claude-opus-5-5': {'inputTokens': 154, 'outputTokens': total_out,
+                                                       'cacheReadInputTokens': cache_read,
+                                                       'cacheCreationInputTokens': 240747, 'costUSD': cost}}}
+        stream = '\n'.join(json.dumps(item) for item in [
+            result(85498, 85498, 10141156, 5.6167), result(96, 87751, 11879360, 6.057484)])
+        usage = core.parse_claude_output(stream)[3]
+        self.assertEqual(usage['cost_usd'], 6.057484)
+        self.assertEqual((usage['input_tokens'], usage['output_tokens']), (154, 87751))
+        self.assertEqual((usage['cache_read_input_tokens'], usage['cache_creation_input_tokens']), (11879360, 240747))
+
     def test_account_headroom_demotes_and_expires_rejection(self):
         self.trace('claude@A', self.quota(.9))
         self.trace('claude@B', self.quota(.2))
