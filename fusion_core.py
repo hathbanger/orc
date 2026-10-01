@@ -2881,6 +2881,8 @@ def launch_lead(workspace: Path, config: dict[str, Any], agent: str, task: str |
         handle, config_path = mcp_config_file(workspace, read_only)
         handle.close()
         argv = [command, "--mcp-config", str(config_path), "--append-system-prompt", LEAD_PROMPT]
+        if settings.get("model"):
+            argv += ["--model", settings["model"]]
         if yolo:
             argv += ["--dangerously-skip-permissions", "--settings", '{"sandbox":{"enabled":false}}']
         elif read_only and interactive:

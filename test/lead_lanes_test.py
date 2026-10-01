@@ -47,6 +47,13 @@ class LeadLanesTest(unittest.TestCase):
                 self.assertEqual(argv[argv.index("--allowedTools") + 1], "mcp__fusion")
                 self.assertEqual(argv[-2:], ["--", "Delegate a review"])
 
+    def test_claude_lead_uses_configured_model(self):
+        config = core.deep_merge(core.DEFAULTS, {"claude": {"command": sys.executable, "model": "claude-opus-5-5"}})
+        with patch.object(core.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            core.launch_lead(self.workspace, config, "claude", "Plan", False)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-opus-5-5")
+
     def test_lead_prompt_points_at_lanes(self):
         self.assertIn("fusion_here", core.LEAD_PROMPT)
         self.assertIn("route", core.LEAD_PROMPT)
