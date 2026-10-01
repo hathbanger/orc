@@ -63,6 +63,9 @@ after its name. Aliases and hidden subcommands are included below.
 - [fusion gym report](#fusion-gym-report)
 - [fusion gym audit](#fusion-gym-audit)
 - [fusion gym priors](#fusion-gym-priors)
+- [fusion quota](#fusion-quota)
+- [fusion quota probe](#fusion-quota-probe)
+- [fusion quota rates](#fusion-quota-rates)
 - [fusion mcp-serve](#fusion-mcp-serve)
 
 ## fusion
@@ -70,12 +73,12 @@ after its name. Aliases and hidden subcommands are included below.
 ```text
 usage: fusion [-h] [--workspace WORKSPACE] [--control-workspace CONTROL_WORKSPACE]
               [--json] [--progress | --quiet]
-              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,mcp-serve} ...
+              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,quota,mcp-serve} ...
 
 Lead/sidekick orchestration for Claude Code, Codex CLI, and Antigravity CLI
 
 positional arguments:
-  {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,mcp-serve}
+  {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,quota,mcp-serve}
     truffle               scout tractable GitHub issues and queue isolated fixes
     ui                    open the local ORC/Fusion control room in your browser
     lead                  launch an interactive lead agent with the Fusion MCP server
@@ -96,6 +99,8 @@ positional arguments:
     learn                 advance and inspect Laya's learning loop without the control
                           room
     gym                   replay merged fix PRs as benchmark tasks across lanes
+    quota                 show what each account has left, probe accounts at reset, and
+                          measure quota per run
     mcp-serve             ==SUPPRESS==
 
 options:
@@ -1137,6 +1142,51 @@ options:
   -h, --help  show this help message and exit
   --out OUT   where to write them (default: lane_priors.json under ORC_HOME,
               ~/.config/orc; `-` prints only)
+```
+
+## fusion quota
+
+show what each account has left, probe accounts at reset, and measure quota per run
+
+```text
+usage: fusion quota [-h] [--json] {probe,rates} ...
+
+positional arguments:
+  {probe,rates}
+    probe        send one tiny run to each account whose exhausted window reset with no
+                 reading since
+    rates        how much of each quota window ORC runs consume
+
+options:
+  -h, --help     show this help message and exit
+  --json
+```
+
+## fusion quota probe
+
+send one tiny run to each account whose exhausted window reset with no reading since
+
+```text
+usage: fusion quota probe [-h] [--dry-run] [--stale HOURS] [--json]
+
+options:
+  -h, --help     show this help message and exit
+  --dry-run      list the accounts that would be probed
+  --stale HOURS  also probe accounts whose latest reading is older than HOURS
+  --json
+```
+
+## fusion quota rates
+
+how much of each quota window ORC runs consume
+
+```text
+usage: fusion quota rates [-h] [--days DAYS] [--json]
+
+options:
+  -h, --help   show this help message and exit
+  --days DAYS
+  --json
 ```
 
 ## fusion mcp-serve

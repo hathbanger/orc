@@ -173,6 +173,28 @@ a recorded lane key cannot constrain unrelated accounts. Routing logs and
 thresholds, and reasons for demotions and exclusions, even before an outcome
 is recorded. These quota decisions are logged even with decision advice off.
 
+### `fusion quota`
+
+`fusion quota` shows each recorded account: its classification (available,
+tight or exhausted) with the reasons, every window's used fraction and reset
+time, how old the reading is, the lanes on that account, and any account and
+model a recent quota failure is cooling. Readings are passive, taken from the
+traces of runs that used the account, so an idle account keeps its last one.
+
+`fusion quota probe` sends one tiny read-only run (role `quota-probe`) to each
+account whose exhausted window has reset with no reading since, choosing the
+account's own lane (an automatic one first, cheapest first). It never moves to
+an overflow twin, records a fresh reading, and does nothing when no account is
+due, so it is safe on a short schedule. `--dry-run` lists what it would probe;
+`--stale HOURS` also probes any reading older than that.
+
+`fusion quota rates [--days 7]` measures how much of each window ORC runs
+consume: every rise between consecutive readings of one account and window is
+charged to the ORC runs on that account that ended in between, as window share
+per USD (Claude) or per million tokens (Codex). Per lane it shows p50/p90 run
+cost and minutes and the share of each window a p90 run uses. Other sessions on
+the same subscription are folded in, so the figures are upper bounds.
+
 ## OpenCode lanes
 
 `opencode` (`opencode run --format json`) is a fifth worker harness that routes

@@ -602,7 +602,8 @@ def quota_twin(config, task, store):
     which still passes every automatic check (caps, requires, its own quota)."""
     import fusion_core as core
     overflow = [name for name in (config.get("decisions") or {}).get("overflow_routes") or [] if name != task.get("route")]
-    if not overflow:
+    # A quota probe asks one account whether it is back; it must not move.
+    if not overflow or task.get("quota_probe"):
         return None
     settings = core.agent_settings(config, task)
     model, effort = settings.get("model"), settings.get("reasoning_effort")

@@ -3224,6 +3224,8 @@ def build_parser() -> argparse.ArgumentParser:
     learn_parser(sub)
     from fusion_gym import add_parser as gym_parser
     gym_parser(sub)
+    from fusion_quota import add_parser as quota_parser
+    quota_parser(sub)
     sub.add_parser("mcp-serve", help=argparse.SUPPRESS)
     return parser
 
@@ -3255,6 +3257,12 @@ def _main(args, parser) -> int:
         from fusion_usage import command as usage_command
         try:
             return usage_command(args, control_workspace)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+    if args.command == "quota":
+        from fusion_quota import run as run_quota
+        try:
+            return run_quota(args, workspace)
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
     if args.command == "ui":
