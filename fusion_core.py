@@ -2784,14 +2784,14 @@ def run_mcp(workspace: Path, config: dict[str, Any]) -> int:
     return 0
 
 
-LEAD_PROMPT = """You are the lead agent in a Fusion harness. Own the user conversation, the plan, ambiguity, and final judgment. Use fusion_delegate for bounded work that benefits from a fresh context or a cheaper sidekick. Send a precise brief with success criteria and constraints. Keep writes single-threaded in the shared workspace. Review the returned handoff, inspect the diff and tests yourself, and take control back when the sidekick is out of depth. Do not delegate the final decision or silently accept an unverified result. After you inspect a delegated result, record your verdict with fusion_outcome."""
+LEAD_PROMPT = """You are the lead agent in a Fusion harness. Own the user conversation, the plan, ambiguity, and final judgment. Use fusion_delegate for bounded work that benefits from a fresh context or a cheaper sidekick. Call fusion_here first: its lanes list the installed workers and configured routes (agent, model, cost tier); pass a route name to fusion_delegate to pick a specific model, or agent auto to let Fusion route. Send a precise brief with success criteria and constraints. Keep writes single-threaded in the shared workspace. Review the returned handoff, inspect the diff and tests yourself, and take control back when the sidekick is out of depth. Do not delegate the final decision or silently accept an unverified result. After you inspect a delegated result, record your verdict with fusion_outcome."""
 
 
 BUILD_PROMPT = """You are the lead for a Fusion feature build. Take the user's idea through requirements, implementation, verification, and review fixes. The user supplies the outcome; you own the coordination. Follow the repository instructions.
 
 1. Inspect the repository, existing behavior, and tests. Infer implementation details from its conventions. Turn the idea into a concise feature brief with observable acceptance criteria, scope, edge cases, and a small implementation plan. Save the brief and plan in a new directory under .fusion/builds/ so they remain available during the build.
 2. Ask only when a missing product decision materially changes behavior or scope, using at most three focused questions at a time. State reasonable assumptions and proceed when the scope is clear. Do not require the user to write a specification, select workers, or approve routine implementation decisions.
-3. Use fusion_delegate for a bounded investigation when it helps and for an independent review of the implementation. Choose an available Claude, Codex, or agy worker; prefer a different agent for review. Give each worker precise questions, success criteria, constraints, and the relevant brief or artifact paths. Set write=false for investigations and reviews. Tell workers not to delegate further. If a worker is unavailable, continue with another available worker or do the work yourself and disclose the missing independent review. Do not repeatedly retry an unavailable provider.
+3. Use fusion_delegate for a bounded investigation when it helps and for an independent review of the implementation. Choose an available worker or configured route from fusion_here's lanes; prefer a different agent or model family for review. Give each worker precise questions, success criteria, constraints, and the relevant brief or artifact paths. Set write=false for investigations and reviews. Tell workers not to delegate further. If a worker is unavailable, continue with another available worker or do the work yourself and disclose the missing independent review. Do not repeatedly retry an unavailable provider.
 4. Implement the feature across the relevant layers, including user-facing states and failure behavior where applicable. Keep the change scoped to the brief and preserve unrelated work. Keep one writer in the workspace at a time, including yourself: wait for any delegated writer before editing. Do not stop after planning or scaffolding.
 5. Run meaningful verification for the acceptance criteria and the repository's required checks. Add tests for changed behavior where useful. Have the reviewer inspect the actual diff and verification evidence. Verify review findings yourself, fix real issues, and rerun affected checks. Continue until the acceptance criteria are met or a concrete blocker prevents progress.
 6. Keep the user informed with concise progress updates. Finish with what shipped, what was tested, any remaining blockers, and how to try the feature. Never claim an unrun check passed or an unresolved requirement is complete.
@@ -2844,8 +2844,13 @@ def launch_lead(workspace: Path, config: dict[str, Any], agent: str, task: str |
             permission_prompts = settings.get("permission_prompts")
             if permission_prompts and not yolo:
                 argv += ["--permission-prompts", permission_prompts]
+        if not yolo:
+            # The lead's own harness tools. Without this a headless lead has no
+            # approval surface and Claude Code auto-denies every Fusion call.
+            argv += ["--allowedTools", "mcp__fusion"]
         if task:
-            argv += [task]
+            # --allowedTools is variadic; end options so the task stays positional.
+            argv += ["--", task]
         try:
             env = os.environ.copy()
             env["FUSION_WORKSPACE"] = str(workspace)

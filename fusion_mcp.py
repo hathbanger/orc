@@ -118,8 +118,40 @@ def orientation(workspace: Path) -> dict[str, Any]:
         "recent_workflows": recent,
         "workflow_spend_usd": round(spend, 4),
         "laya": laya,
+        "lanes": _lanes(workspace),
         "next": _suggest(active, recent),
     }
+
+
+def _lanes(workspace: Path) -> list[dict[str, Any]]:
+    """Workers and named routes a lead can pass to fusion_delegate.
+
+    Only names, models and an executable check: no commands, env or keys,
+    and nothing is started or contacted.
+    """
+    try:
+        import fusion_core as core
+
+        config = core.load_config(workspace)[0]
+    except Exception:
+        return []
+    lanes = []
+    for agent in ("claude", "codex", "agy", "grok", "opencode"):
+        settings = config.get(agent) or {}
+        lanes.append({"agent": agent, "route": None, "model": settings.get("model") or None,
+                      "available": bool(core.executable(str(settings.get("command", agent))))})
+    for name, route in (config.get("routes") or {}).items():
+        if not isinstance(route, dict) or not route.get("agent"):
+            continue
+        agent = str(route["agent"])
+        command = str(route.get("command") or (config.get(agent) or {}).get("command") or agent)
+        lanes.append({"agent": agent, "route": name,
+                      "model": route.get("model") or route.get("model_selector") or (config.get(agent) or {}).get("model") or None,
+                      "cost_tier": route.get("cost_tier"), "available": bool(core.executable(command))})
+    pool = (config.get("decisions") or {}).get("auto_routes")
+    for lane in lanes:
+        lane["automatic"] = pool is None or (lane["route"] or lane["agent"]) in pool
+    return lanes
 
 
 def _suggest(active: list[dict[str, Any]], recent: list[dict[str, Any]]) -> str:
