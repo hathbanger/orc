@@ -100,7 +100,9 @@ class QuotaTest(unittest.TestCase):
         agent.chmod(0o755)
         config = {**self.config, 'claude': {'command': str(agent)}, 'timeout_seconds': 10}
         task = core.make_task(self.root, 'claude', 'fixture', 'implementation', [], [], None, True, False, route='A')
-        self.store.set_session(task['session_key'], 'prior-session')
+        # A pinned route resumes its own lane's session (see dispatch's ':lane=' suffix).
+        lane_key = task['session_key'] + ':lane=A'
+        self.store.set_session(lane_key, 'prior-session')
         run_dir = self.store.create(task)
         quota_event = {'type': 'rate_limit_event', 'rate_limit_info': {'status': 'allowed',
                        'unifiedWindows': {'five_hour': {'utilization': .4, 'resetsAt': NOW + 3600}}}}
@@ -129,7 +131,7 @@ class QuotaTest(unittest.TestCase):
                 self.assertEqual(results[1]['usage']['cost_usd'], .025)
                 self.assertEqual(results[1]['model'], 'claude-fixture')
                 self.assertEqual(results[1]['denied_count'], len(denials))
-                self.assertEqual(self.store.sessions()[task['session_key']], 'new-session')
+                self.assertEqual(self.store.sessions()[lane_key], 'new-session')
                 self.assertEqual(normalized['windows']['five_hour']['used'], .4)
                 span = self.store.traces(1)[0]
                 self.assertEqual(span['quota'], normalized)
