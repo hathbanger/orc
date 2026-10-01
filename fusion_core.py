@@ -159,6 +159,7 @@ DEFAULTS: dict[str, Any] = {
         "command": "opencode",
         "model": "",
         "opencode_agent": "",
+        "empty_step_limit": 5,
         "disable_mcp": [],
         "bash_allow": [],
         "permission": {},
@@ -1646,6 +1647,42 @@ def parse_opencode_output(stdout: str) -> tuple[str | None, str, str | None, dic
     return session_id, "".join(text).strip(), failure, usage, None, notes
 
 
+def opencode_empty_step_guard(limit: int):
+    """Stop a run whose provider keeps answering with nothing.
+
+    A gateway that reports a failure as a successful but empty stream gives
+    OpenCode a step with no tokens and finish reason "unknown"; OpenCode then
+    retries indefinitely, so the worker would otherwise run until its timeout.
+    `limit` consecutive steps with no tokens and no text or tool call abort it.
+    """
+    state = {"empty": 0, "activity": False}
+
+    def check(line: bytes) -> str | None:
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(event, dict):
+            return None
+        kind = event.get("type")
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if kind in {"text", "tool_use", "reasoning"}:
+            state["activity"] = True
+        elif kind == "step_finish":
+            tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+            cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+            spent = any(isinstance(v, (int, float)) and v for v in (tokens.get("input"), tokens.get("output"),
+                                                                     tokens.get("reasoning"), cache.get("read"), cache.get("write")))
+            state["empty"] = 0 if spent or state["activity"] else state["empty"] + 1
+            state["activity"] = False
+            if state["empty"] >= limit:
+                return (f"OpenCode received {state['empty']} empty responses in a row (no tokens, no output; last "
+                        f"finish reason {part.get('reason')!r}); the provider is likely failing silently")
+        return None
+
+    return check
+
+
 def opencode_permission(settings: dict[str, Any], task: dict[str, Any], yolo: bool) -> dict[str, Any]:
     """The OPENCODE_PERMISSION policy for one worker.
 
@@ -2058,7 +2095,10 @@ def agent_command(
         # The prompt is positional; `--` keeps a brief that starts with a dash
         # from being read as an option.
         argv += ["--", brief_for(task)]
-        return argv, env, {"command": command, "model": selected_model,
+        limit = settings.get("empty_step_limit", 5)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("opencode.empty_step_limit must be a non-negative integer (0 disables)")
+        return argv, env, {"command": command, "model": selected_model, "empty_step_limit": limit,
                            **({"execution_choice": choice} if choice else {})}
     if agent == "claude":
         command = settings.get("command", "claude")
@@ -2317,6 +2357,7 @@ def dispatch(
                 timeout=effective_timeout,
                 stdout_path=stdout_path, stderr_path=stderr_path, label=label,
                 plain_output=task["agent"] == "grok" and metadata.get("output_format") == "plain",
+                abort_on=opencode_empty_step_guard(metadata["empty_step_limit"]) if metadata.get("empty_step_limit") else None,
             )
         exit_code, worker_stdout = completed.returncode, completed.stdout
         if metadata.get("execution_choice"):
@@ -2385,6 +2426,9 @@ def dispatch(
         exit_code = 126
     except progress.WorkerCancelled as exc:
         summary, failure, status, exit_code = "worker interrupted", str(exc), "blocked", 130
+    except progress.WorkerAborted as exc:
+        summary, failure, status, exit_code = "worker stopped", str(exc), "error", 125
+        worker_stdout = exc.output or ""
     duration_ms = int((time.monotonic() - started) * 1000)
     progress.emit(label, f"worker {status} after {progress.elapsed(duration_ms / 1000)}; exit {exit_code}")
     denied = provider_denials(task["agent"], worker_stdout)

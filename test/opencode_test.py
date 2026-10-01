@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -259,6 +260,47 @@ class OpenCodeCommandTest(unittest.TestCase):
         self.assertNotIn("opencode", keys)
         self.assertIn("explicit provider/model", rejected["opencode"])
         self.assertEqual(core.lane_key("opencode", config["routes"]["oc-sonnet"]), "opencode@gateway/anthropic")
+
+
+class OpenCodeEmptyStepTest(unittest.TestCase):
+    def empty(self):
+        return json.dumps(finish("unknown", cost=0, input=0, output=0, reasoning=0, cache={"read": 0, "write": 0})).encode()
+
+    def test_guard_counts_only_consecutive_empty_steps(self):
+        guard = core.opencode_empty_step_guard(3)
+        self.assertIsNone(guard(self.empty()))
+        self.assertIsNone(guard(self.empty()))
+        self.assertIsNone(guard(json.dumps(text("progress")).encode()))
+        self.assertIsNone(guard(self.empty()))  # resets: that step produced text
+        self.assertIsNone(guard(self.empty()))
+        self.assertIsNone(guard(self.empty()))
+        self.assertIn("3 empty responses", guard(self.empty()))
+        self.assertIsNone(core.opencode_empty_step_guard(1)(json.dumps(finish("stop")).encode()))
+        self.assertIsNone(guard(b"not json"))
+
+    def test_dispatch_stops_a_silently_failing_provider_early(self):
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {"FUSION_DECISIONS_MODE": "off", "FUSION_TELEMETRY": "0"}):
+            root = Path(d)
+            worker = root / "opencode-fixture"
+            empty = finish("unknown", cost=0, input=0, output=0, reasoning=0, cache={"read": 0, "write": 0})
+            worker.write_text(f"#!{sys.executable}\nimport json,sys,time\nwhile True:\n    print(json.dumps({empty!r}), flush=True)\n    time.sleep(.05)\n")
+            worker.chmod(0o755)
+            config = core.deep_merge(core.DEFAULTS, {"opencode": {"command": str(worker), "model": "google/gemini-x",
+                                                                  "empty_step_limit": 4}, "decisions": {"mode": "off"}})
+            task = core.make_task(root, "opencode", "Review", "review", [], [], None, False, False)
+            task["timeout_seconds"] = 120
+            started = time.monotonic()
+            result = core.dispatch(config, task, core.RunStore(root))
+            self.assertLess(time.monotonic() - started, 30)
+            self.assertEqual((result["status"], result["exit_code"]), ("error", 125), result)
+            self.assertIn("empty responses", " ".join(result["blockers"]))
+            self.assertEqual(core.failure_class(result), "worker_error")
+
+    def test_limit_is_validated(self):
+        config = core.deep_merge(core.DEFAULTS, {"opencode": {"empty_step_limit": -1}})
+        task = core.make_task(Path(tempfile.gettempdir()), "opencode", "x", "review", [], [], None, False, False)
+        with self.assertRaisesRegex(ValueError, "empty_step_limit"):
+            core.agent_command(config, task, None)
 
 
 class OpenCodeDispatchTest(unittest.TestCase):

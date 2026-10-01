@@ -309,6 +309,12 @@ an agent's own permission rules over the global ones, so this keeps a user's
 default `build` agent from loosening a read-only worker. Set `opencode_agent` to
 run workers as one of your own OpenCode agents instead (the policy is applied
 to it too). `agent` is not used for this: in a route it names the Fusion harness.
+
+`empty_step_limit` (default 5; 0 disables) stops a worker after that many
+consecutive empty responses: steps with no tokens and no text or tool call. A
+provider or gateway that reports a failure as an empty successful stream would
+otherwise leave OpenCode retrying until `timeout_seconds`; the run instead ends
+as an error that names the cause.
 `disable_mcp` is a list of MCP server names to disable for this worker (sets
 `enabled: false` in `OPENCODE_CONFIG_CONTENT`). `bash_allow` is a list of
 additional Bash patterns to permit in restricted write-mode workers.

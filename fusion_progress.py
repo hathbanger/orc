@@ -157,6 +157,14 @@ class WorkerCancelled(RuntimeError):
     pass
 
 
+class WorkerAborted(RuntimeError):
+    """A worker stopped because its output showed it could not make progress."""
+
+    def __init__(self, reason, output="", stderr=""):
+        super().__init__(reason)
+        self.output, self.stderr = output, stderr
+
+
 def check_cancelled():
     if _reporter.cancelled.is_set():
         raise WorkerCancelled("worker interrupted by user")
@@ -232,8 +240,12 @@ def _stop_process(proc):
     proc.wait()
 
 
-def run_logged(argv, *, cwd, env, input, timeout, stdout_path, stderr_path, label, plain_output=False):
-    """Write worker output as it arrives, retaining the original result parsers."""
+def run_logged(argv, *, cwd, env, input, timeout, stdout_path, stderr_path, label, plain_output=False, abort_on=None):
+    """Write worker output as it arrives, retaining the original result parsers.
+
+    `abort_on`, if given, sees each complete stdout line and returns a reason
+    to stop the worker early (WorkerAborted), or None to keep going.
+    """
     check_cancelled()
     started = time.monotonic()
     activity_path = stdout_path.with_name("activity.json")
@@ -261,10 +273,11 @@ def run_logged(argv, *, cwd, env, input, timeout, stdout_path, stderr_path, labe
         pending = b""
         last_saved = 0.0
         last_message = ""
+        abort_reason = None
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
         def inspect_output():
-            nonlocal pending, last_message
+            nonlocal pending, last_message, abort_reason
             # Read bounded chunks; logs themselves remain complete on disk.
             chunk = reader.read(65536)
             if plain_output:
@@ -276,6 +289,8 @@ def run_logged(argv, *, cwd, env, input, timeout, stdout_path, stderr_path, labe
             lines = pending.split(b"\n")
             pending = lines.pop()
             for line in lines:
+                if abort_on is not None and abort_reason is None:
+                    abort_reason = abort_on(line)
                 message = worker_message(line)
                 if message and message != last_message:
                     emit(label, message)
@@ -298,6 +313,8 @@ def run_logged(argv, *, cwd, env, input, timeout, stdout_path, stderr_path, labe
                     except subprocess.TimeoutExpired:
                         pass
                     inspect_output()
+                    if abort_reason:
+                        raise WorkerAborted(abort_reason)
                     if time.monotonic() - last_saved >= 2:
                         save("running")
                         last_saved = time.monotonic()
@@ -307,8 +324,8 @@ def run_logged(argv, *, cwd, env, input, timeout, stdout_path, stderr_path, labe
                         break
         except BaseException as exc:
             _stop_process(proc)
-            save("timed_out" if isinstance(exc, subprocess.TimeoutExpired) else "interrupted")
-            if isinstance(exc, subprocess.TimeoutExpired):
+            save("timed_out" if isinstance(exc, subprocess.TimeoutExpired) else "aborted" if isinstance(exc, WorkerAborted) else "interrupted")
+            if isinstance(exc, (subprocess.TimeoutExpired, WorkerAborted)):
                 exc.output = stdout_path.read_text(errors="replace")
                 exc.stderr = stderr_path.read_text(errors="replace")
             raise
