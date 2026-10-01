@@ -275,7 +275,9 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
     choices = []
     pool = auto_pool(config, task)
     automatic = task.get("agent", "auto") == "auto" and not task.get("route")
-    needs = set(task.get("needs") or []) if automatic else set()
+    # Every writing task needs `write`, in every execution mode, so a lane that
+    # lacks it stays on reads; the blind fallback for unmet needs cannot drop it.
+    needs = (set(task.get("needs") or []) | ({"write"} if task.get("write") else set())) if automatic else set()
     preferred = config.get("sidekick", "codex")
     candidates = [(name, name, None) for name in dict.fromkeys([preferred, "codex", "claude", "agy", "grok", "opencode"])]
     candidates += [(name, settings.get("agent"), name) for name, settings in config.get("routes", {}).items()]

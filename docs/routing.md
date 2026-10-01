@@ -105,7 +105,9 @@ letting `auto` pick model and effort among the lanes you trust. See
 A task may name capabilities it needs (`--needs local_server`). Automatic
 routing drops lanes whose config `lacks` one before ranking; if that leaves
 none, it routes on the full pool and logs `needs_unmet`. The routing log
-records `needs` for every such choice. See [configuration](configuration.md).
+records `needs` for every such choice. Every writing task also needs `write`, in
+every execution mode, so a lane that `lacks` it only takes read-only work and
+the fallback never gives it a write. See [configuration](configuration.md).
 
 ### Overflow lanes
 

@@ -109,6 +109,16 @@ in the routing log. Needs never move a task off a lane it named.
 `local_server` is the need for binding and calling a server on 127.0.0.1 and
 listing processes, which Codex's restricted sandbox denies.
 
+`write` is a need every writing task has without asking, in every execution
+mode including `yolo`. A lane with `"lacks": ["write"]` takes only read-only
+work (reviews, investigations, interpretation) during automatic routing, and
+the full-pool fallback for unmet needs never hands it a write. Use it for a
+model you trust to read but not to change code:
+
+```json
+{"routes": {"agy-flash-medium": {"agent": "agy", "lacks": ["write"]}}}
+```
+
 ### Metered lanes and overflow
 
 Claude Code prefers `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) over the

@@ -97,6 +97,33 @@ class AutoRoutesTest(unittest.TestCase):
         log = [row for row in read_jsonl(DecisionStore(self.root).path) if row.get('event') == 'routing_log']
         self.assertEqual((log[-1]['needs'], log[-1]['needs_unmet']), (['local_server'], True))
 
+    def test_a_lane_that_lacks_write_only_takes_reads_in_every_mode(self):
+        self.config['decisions']['auto_routes'] = ['opus', 'flash']
+        self.config['routes']['flash']['lacks'] = ['write']
+        for mode in ('restricted', 'yolo'):
+            with self.subTest(mode=mode):
+                self.config['execution_mode'] = mode
+                rejected = {}
+                self.assertEqual(self.keys(self.task(), rejected), ['opus'])
+                self.assertEqual(rejected['flash'], 'lacks write this task needs')
+                read = core.make_task(self.root, 'auto', 'fixture', 'reviewer', [], [], None, False, False)
+                self.assertEqual(self.keys(read), ['flash', 'opus'])
+
+    def test_unmet_needs_never_move_a_write_onto_a_lane_that_lacks_write(self):
+        self.config['decisions'].update({'auto_routes': ['opus', 'flash'], 'mode': 'shadow',
+                                         'rank_by_outcomes': True, 'routing_epsilon': 1.0})
+        self.config['execution_mode'] = 'yolo'
+        self.config['routes']['opus']['lacks'] = ['local_server']
+        self.config['routes']['flash']['lacks'] = ['write', 'local_server']
+        routes = set()
+        with patch.dict(os.environ, {'FUSION_DECISIONS_MODE': 'shadow'}), patch.object(core, 'executable', return_value=True):
+            for _ in range(20):
+                task = self.task()
+                task['needs'] = ['local_server']
+                policy.route_task(self.config, task, self.store)
+                routes.add(task['route'])
+        self.assertEqual(routes, {'opus'})
+
     def test_make_task_normalizes_and_validates_needs(self):
         task = core.make_task(self.root, 'auto', 'x', 'implementation', [], [], None, False, True, needs=['b', 'a', 'b'])
         self.assertEqual(task['needs'], ['a', 'b'])
