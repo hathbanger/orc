@@ -572,6 +572,65 @@ def rank_by_outcomes(candidates, minimum=3, warm_epsilon=None, explore=True, cos
                           for candidate in sorted(tier, key=lambda c: tie_key(c, bucket))])
 
 
+def quota_blocked(config, task, store):
+    """Why the pinned lane's account cannot serve it now: exhausted quota, or a
+    quota failure on the same account and model within the cooldown."""
+    import fusion_core as core
+    settings = core.agent_settings(config, task)
+    key, model = core.lane_key(task["agent"], settings), settings.get("model")
+    thresholds = quota_settings(config)
+    for entry in usage.headroom(store.workspace, include_raw=False):
+        if entry.get("lane_key") == key and entry.get("quota"):
+            quota = quota_assessment(entry, thresholds, time.time())
+            if quota["classification"] == "exhausted":
+                return "; ".join(quota["reasons"])
+    now = time.time() * 1000
+    for span in store.traces(limit=200):
+        if span.get("failure_class") != "quota" or not 0 <= now - span.get("end_time_ms", 0) < core.LANE_COOLDOWN_SECONDS * 1000:
+            continue
+        lane = config.get("routes", {}).get(span.get("route"), {})
+        span_settings = core.deep_merge(config.get(span.get("agent"), {}), lane)
+        span_model = span_settings.get("model") or span.get("model")
+        if core.lane_key(span.get("agent"), span_settings) == key and (not span_model or not model or span_model == model):
+            return f"a run on {key} hit its quota within the last {core.LANE_COOLDOWN_SECONDS // 60} minutes"
+    return None
+
+
+def quota_twin(config, task, store):
+    """A pin names a model and effort, not an account. When the pinned lane's
+    account cannot serve it, the same model and effort runs on an overflow route,
+    which still passes every automatic check (caps, requires, its own quota)."""
+    import fusion_core as core
+    overflow = [name for name in (config.get("decisions") or {}).get("overflow_routes") or [] if name != task.get("route")]
+    if not overflow:
+        return None
+    settings = core.agent_settings(config, task)
+    model, effort = settings.get("model"), settings.get("reasoning_effort")
+    if not model:
+        return None
+    twins = []
+    for name in overflow:
+        route = config.get("routes", {}).get(name) or {}
+        if route.get("agent") != task["agent"]:
+            continue
+        twin = core.agent_settings(config, {"agent": task["agent"], "route": name})
+        if twin.get("model") == model and twin.get("reasoning_effort") == effort \
+                and core.lane_key(task["agent"], twin) != core.lane_key(task["agent"], settings):
+            twins.append(name)
+    if not twins:
+        return None
+    reason = quota_blocked(config, task, store)
+    if not reason:
+        return None
+    pool = core.deep_merge(config, {"decisions": {"auto_routes": twins, "overflow_routes": []}})
+    probe = {**task, "agent": "auto", "route": None, "settings_overrides": {}}
+    eligible = [c["route"] for c in route_candidates(pool, probe, store) if c["route"] in twins]
+    if not eligible:
+        return None
+    return {"from": task.get("route") or task["agent"], "to": eligible[0], "model": model,
+            "reasoning_effort": effort, "reason": reason}
+
+
 def route_task(config, task, store, rng=None):
     """Record advice for explicit routing, apply only to a genuinely automatic lane.
 
@@ -580,6 +639,14 @@ def route_task(config, task, store, rng=None):
     engine = DecisionEngine(store.workspace, config)
     epsilon = routing_epsilon(config)
     automatic = task["agent"] == "auto" and not task.get("route")
+    if not automatic:
+        twin = quota_twin(config, task, store)
+        if twin:
+            task["quota_twin"] = twin
+            task["route"] = twin["to"]
+            task["session_key"] += ":" + twin["to"]
+            engine.store.append("routing_log", **context(task), scope="quota_twin", write=bool(task.get("write")),
+                                chosen=twin["to"], quota_twin=twin)
     quota_audit, rejected = {}, {}
     if task["agent"] == "auto" and task.get("route"):
         task["agent"] = config.get("routes", {}).get(task["route"], {}).get("agent")

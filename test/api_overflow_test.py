@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fusion_core as core
-from fusion_policy import route_candidates
+from fusion_policy import route_candidates, route_task
 
 
 class ApiOverflowTest(unittest.TestCase):
@@ -46,6 +46,49 @@ class ApiOverflowTest(unittest.TestCase):
         self.key.write_text("k")
         quota = {"agent": "claude", "route": "sub", "failure_class": "quota", "end_time_ms": core.now_ms()}
         self.assertEqual(self.keys([quota]), {"api"})
+
+    def pinned(self, spans=(), **task):
+        task = core.make_task(self.workspace, task.pop("agent", "claude"), "Fix it", "implementation", [], [], None, False, True, **task)
+        with patch.object(self.store, "traces", return_value=list(spans)), patch.object(core, "executable", return_value=True):
+            route_task(self.config, task, self.store)
+        return task
+
+    def test_a_pinned_lane_out_of_quota_runs_its_api_twin(self):
+        self.key.write_text("k")
+        quota = {"agent": "claude", "route": "sub", "failure_class": "quota", "end_time_ms": core.now_ms()}
+        task = self.pinned([quota], route="sub")
+        self.assertEqual(task["route"], "api")
+        self.assertEqual((task["quota_twin"]["from"], task["quota_twin"]["to"], task["quota_twin"]["model"]),
+                         ("sub", "api", "claude-opus-5-5"))
+        self.assertTrue(task["session_key"].endswith(":api"))
+
+    def test_a_pinned_agent_and_model_runs_its_api_twin(self):
+        self.key.write_text("k")
+        quota = {"agent": "claude", "model": "claude-opus-5-5", "failure_class": "quota", "end_time_ms": core.now_ms()}
+        task = self.pinned([quota], settings_overrides={"model": "claude-opus-5-5"})
+        self.assertEqual((task["agent"], task["route"]), ("claude", "api"))
+
+    def test_an_exhausted_reading_moves_a_pin_before_any_failure(self):
+        self.key.write_text("k")
+        self.store.root.mkdir(parents=True, exist_ok=True)
+        reset = core.now_ms() / 1000 + 3600
+        self.store.traces_path.write_text(json.dumps({"agent": "claude", "lane_key": "claude", "end_time_ms": core.now_ms(),
+            "quota": {"status": "rejected", "windows": {"seven_day": {"used": 1.0, "resets_at": reset}}}}) + "\n")
+        self.assertEqual(self.pinned(route="sub")["route"], "api")
+
+    def test_a_pin_stays_put_when_its_account_can_serve_it(self):
+        self.key.write_text("k")
+        task = self.pinned(route="sub")
+        self.assertEqual(task["route"], "sub")
+        self.assertNotIn("quota_twin", task)
+
+    def test_a_pin_never_changes_model_or_breaks_a_cap(self):
+        self.key.write_text("k")
+        now = core.now_ms()
+        quota = {"agent": "claude", "route": "sub", "failure_class": "quota", "end_time_ms": now}
+        self.assertEqual(self.pinned([quota], route="sub", settings_overrides={"model": "claude-fable-5-1"})["route"], "sub")
+        spent = {"agent": "claude", "route": "api", "end_time_ms": now - 1000, "usage": {"cost_usd": 160.0}}
+        self.assertEqual(self.pinned([quota, spent], route="sub")["route"], "sub")
 
     def test_a_lane_waits_for_its_required_file(self):
         rejected = {}

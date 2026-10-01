@@ -164,7 +164,9 @@ cannot exceed `hard`. Expired windows stop constraining routing. Unknown
 duration disables only the pacing comparison; missing quota preserves the
 existing order.
 
-Explicit routes stay pinned, and existing authorized exploration still applies.
+Explicit routes stay pinned to their model and effort; when the pinned account
+is exhausted they move to a same-model overflow route (`quota_twin`). Existing
+authorized exploration still applies.
 Quota-free traces do not erase an earlier observation, and observations without
 a recorded lane key cannot constrain unrelated accounts. Routing logs and
 `fusion decisions routing-report` include quota windows, classifications,

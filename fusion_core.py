@@ -2409,6 +2409,7 @@ def dispatch(
         "agent": task["agent"],
         "role": task["role"],
         "route": task.get("route"),
+        **({"quota_twin": task["quota_twin"]} if task.get("quota_twin") else {}),
         "model": model,
         "reasoning_effort": metadata.get("reasoning_effort"),
         **({"api_key_source": key_source} if key_source is not None else {}),

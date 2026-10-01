@@ -155,6 +155,14 @@ no other pooled lane is (for example the subscription lanes are over the quota
 hard limit or cooling down). Routing returns to the primary lanes as soon as
 one is available again.
 
+A pin names a model and effort, not an account. When a pinned run's account
+cannot serve it (its quota reading is exhausted, or a run on the same account
+and model hit its quota within the cooldown), Fusion runs it on an overflow
+route with the same agent, model and effort instead, if that route passes the
+automatic checks (`requires`, `daily_budget_usd`, its own quota). The result and
+the routing log record `quota_twin` (`from`, `to`, `model`, `reasoning_effort`,
+`reason`). With no matching overflow route the pin runs as named.
+
 ```json
 {"decisions": {"auto_routes": ["claude-opus-medium", "claude-api-opus-medium"], "overflow_routes": ["claude-api-opus-medium"]},
  "routes": {"claude-api-opus-medium": {"agent": "claude", "model": "claude-opus-5-5", "reasoning_effort": "medium",
