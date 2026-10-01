@@ -131,7 +131,13 @@ class OpenCodeCommandTest(unittest.TestCase):
         # Trailing denies must come after any allow they override.
         keys = list(policy["bash"])
         self.assertGreater(keys.index("*>*"), keys.index("git diff *"))
-        self.assertEqual(json.loads(env["OPENCODE_CONFIG_CONTENT"]), {"mcp": {"example-mcp": {"enabled": False}}})
+        content = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        self.assertEqual(content["mcp"], {"example-mcp": {"enabled": False}})
+        # The policy is pinned on the worker's own agent too: OpenCode applies
+        # agent permission over global permission.
+        self.assertEqual(argv[argv.index("--agent") + 1], "fusion-worker")
+        self.assertEqual(content["agent"]["fusion-worker"]["permission"], policy)
+        self.assertEqual(content["agent"]["fusion-worker"]["mode"], "primary")
         self.assertEqual(metadata["model"], "anthropic/claude-sonnet-4-6")
 
     def test_writer_edits_and_runs_allowed_commands_only(self):
@@ -156,6 +162,23 @@ class OpenCodeCommandTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--variant") + 1], "max")
         self.assertEqual(argv[argv.index("--session") + 1], "ses_prev")
         self.assertEqual(metadata["execution_choice"]["requested"]["reasoning_effort"], "max")
+
+    def test_route_harness_name_is_not_passed_as_the_opencode_agent(self):
+        # A route's "agent" names the Fusion harness; it once leaked through as
+        # `--agent opencode`, so OpenCode fell back to the user's default agent
+        # and that agent's own permissions overrode the worker policy.
+        config = core.deep_merge(core.DEFAULTS, {"routes": {"oc": {"agent": "opencode", "model": "openai/gpt-5.5"}}})
+        task = core.make_task(self.root, "opencode", "Review", "reviewer", [], [], None, False, False, route="oc")
+        argv, env, _ = core.agent_command(config, task, None)
+        self.assertEqual(argv[argv.index("--agent") + 1], "fusion-worker")
+        self.assertNotIn("opencode", argv[argv.index("--agent") + 1:argv.index("--agent") + 2])
+
+    def test_named_opencode_agent_gets_the_policy(self):
+        argv, env, _ = self.command(opencode_agent="review")
+        self.assertEqual(argv[argv.index("--agent") + 1], "review")
+        agent = json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]["review"]
+        self.assertEqual(agent["permission"]["edit"], "deny")
+        self.assertNotIn("mode", agent)
 
     def test_model_must_name_its_provider(self):
         with self.assertRaisesRegex(ValueError, "provider/model"):
@@ -209,7 +232,7 @@ class OpenCodeCommandTest(unittest.TestCase):
         import unittest.mock as mock
         config = core.deep_merge(core.DEFAULTS, {
             "opencode": {"model": "anthropic/claude-opus-5-5", "reasoning_effort": "high",
-                         "agent": "coding", "command": "opencode"}
+                         "opencode_agent": "coding", "command": "opencode"}
         })
         launched = []
         with mock.patch("subprocess.run", side_effect=lambda a, **kw: launched.append(a) or mock.MagicMock(returncode=0)), \

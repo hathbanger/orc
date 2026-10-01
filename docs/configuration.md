@@ -281,7 +281,7 @@ workers run headless, so the wrapper must not prompt.
   "opencode": {
     "command": "opencode",
     "model": "anthropic/claude-sonnet-4-6",
-    "agent": "",
+    "opencode_agent": "",
     "disable_mcp": [],
     "bash_allow": [],
     "permission": {},
@@ -293,7 +293,12 @@ workers run headless, so the wrapper must not prompt.
 `command` is the binary (default `opencode`). `model` must include the provider
 prefix (`provider/model`, e.g. `anthropic/claude-sonnet-4-6`). An explicit model
 is required for automatic routing — OpenCode's configured default could be any
-provider. `agent` sets `--agent`; leave empty for the default.
+provider. Workers run as a dedicated OpenCode agent, `fusion-worker`, which
+Fusion defines on the fly with the worker's permission policy; OpenCode applies
+an agent's own permission rules over the global ones, so this keeps a user's
+default `build` agent from loosening a read-only worker. Set `opencode_agent` to
+run workers as one of your own OpenCode agents instead (the policy is applied
+to it too). `agent` is not used for this: in a route it names the Fusion harness.
 `disable_mcp` is a list of MCP server names to disable for this worker (sets
 `enabled: false` in `OPENCODE_CONFIG_CONTENT`). `bash_allow` is a list of
 additional Bash patterns to permit in restricted write-mode workers.

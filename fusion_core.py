@@ -150,11 +150,15 @@ DEFAULTS: dict[str, Any] = {
     # edits plus `bash_allow`, everything else would ask and a headless run
     # auto-rejects it. `permission` merges extra rules over that policy,
     # `disable_mcp` turns named MCP servers off for workers and `config`
-    # is merged into OPENCODE_CONFIG_CONTENT.
+    # is merged into OPENCODE_CONFIG_CONTENT. Workers run as the OpenCode
+    # agent `opencode_agent` (default: a dedicated `fusion-worker`); the
+    # policy is also set on that agent, because OpenCode applies an agent's
+    # own permission rules over the global ones. (`agent` is a route's
+    # harness name, so it cannot double as OpenCode's agent.)
     "opencode": {
         "command": "opencode",
         "model": "",
-        "agent": "",
+        "opencode_agent": "",
         "disable_mcp": [],
         "bash_allow": [],
         "permission": {},
@@ -1675,6 +1679,16 @@ def opencode_permission(settings: dict[str, Any], task: dict[str, Any], yolo: bo
     return merged
 
 
+OPENCODE_WORKER_AGENT = "fusion-worker"
+
+
+def opencode_agent_name(settings: dict[str, Any]) -> str:
+    name = settings.get("opencode_agent") or OPENCODE_WORKER_AGENT
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        raise ValueError("opencode.opencode_agent must be an OpenCode agent name")
+    return name
+
+
 def opencode_config_content(settings: dict[str, Any], env: dict[str, str]) -> str | None:
     content: dict[str, Any] = {}
     if env.get("OPENCODE_CONFIG_CONTENT"):
@@ -1985,10 +1999,15 @@ def agent_command(
         return argv, env, {"command": command, "model": settings.get("model") or "", "output_format": output_format}
     if agent == "opencode":
         command = settings.get("command", "opencode")
-        env["OPENCODE_PERMISSION"] = json.dumps(opencode_permission(settings, task, yolo), separators=(",", ":"))
-        content = opencode_config_content(settings, env)
-        if content:
-            env["OPENCODE_CONFIG_CONTENT"] = content
+        policy = opencode_permission(settings, task, yolo)
+        env["OPENCODE_PERMISSION"] = json.dumps(policy, separators=(",", ":"))
+        worker_agent = opencode_agent_name(settings)
+        content = json.loads(opencode_config_content(settings, env) or "{}")
+        content = deep_merge(content, {"agent": {worker_agent: {
+            "permission": policy,
+            **({"mode": "primary", "description": "Fusion worker (headless, policy set by Fusion)"}
+               if worker_agent == OPENCODE_WORKER_AGENT else {})}}})
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps(content, separators=(",", ":"))
         argv = [command, "run", "--format", "json", "--dir", task["workspace"]]
         if yolo:
             argv.append("--auto")
@@ -1997,8 +2016,7 @@ def agent_command(
             if "/" not in selected_model:
                 raise ValueError("OpenCode models are provider/model, e.g. anthropic/claude-sonnet-4-6")
             argv += ["-m", selected_model]
-        if settings.get("agent"):
-            argv += ["--agent", str(settings["agent"])]
+        argv += ["--agent", worker_agent]
         choice = None
         if settings.get("reasoning_effort") is not None:
             from fusion_reasoning import check_pair, recorded_choice
@@ -2896,8 +2914,8 @@ def launch_lead(workspace: Path, config: dict[str, Any], agent: str, task: str |
             if "/" not in str(settings["model"]):
                 raise ValueError("OpenCode models are provider/model, e.g. anthropic/claude-sonnet-4-6")
             flags += ["-m", str(settings["model"])]
-        if settings.get("agent"):
-            flags += ["--agent", str(settings["agent"])]
+        if settings.get("opencode_agent"):
+            flags += ["--agent", opencode_agent_name(settings)]
         if settings.get("reasoning_effort") is not None:
             from fusion_reasoning import check_pair
             check_pair("opencode", settings)
