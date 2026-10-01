@@ -70,8 +70,7 @@ after its name. Aliases and hidden subcommands are included below.
 ```text
 usage: fusion [-h] [--workspace WORKSPACE] [--control-workspace CONTROL_WORKSPACE]
               [--json] [--progress | --quiet]
-              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,mcp-serve}
-              ...
+              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,mcp-serve} ...
 
 Lead/sidekick orchestration for Claude Code, Codex CLI, and Antigravity CLI
 
@@ -665,8 +664,7 @@ local Laya setup, decisions and reviewed learning
 
 ```text
 usage: fusion decisions [-h]
-                        {setup,status,list,show,probe,label,suggest,eval-drafter,export,routing-report,calibrate,train,evaluate}
-                        ...
+                        {setup,status,list,show,probe,label,suggest,eval-drafter,export,routing-report,calibrate,train,evaluate} ...
 
 positional arguments:
   {setup,status,list,show,probe,label,suggest,eval-drafter,export,routing-report,calibrate,train,evaluate}
