@@ -139,8 +139,35 @@ def archive(repo, rev, destination):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(git(repo, "archive", "--format=tar", rev, binary=True))) as tar:
-        tar.extractall(destination, filter="data")
+        safe_extract(tar, destination)
     return destination
+
+
+def safe_extract(tar, destination):
+    """`extractall(filter="data")`, also on Pythons without extraction filters.
+
+    The filter argument exists from 3.12 (and in late 3.8-3.11 patch releases);
+    macOS still ships 3.9.6 as /usr/bin/python3, where it raised TypeError and
+    `gym extract` failed. The fallback keeps the data filter's guarantees that
+    matter for a git archive: members stay inside destination, links may not
+    point outside it, and only regular files, directories and links are written.
+    """
+    if hasattr(tarfile, "data_filter"):
+        tar.extractall(destination, filter="data")
+        return
+    root = Path(destination).resolve()
+    members = []
+    for member in tar.getmembers():
+        target = (root / member.name).resolve()
+        if not target.is_relative_to(root) or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+            raise ValueError(f"refusing to extract {member.name!r} outside {root}")
+        if member.issym() or member.islnk():
+            base = target.parent if member.issym() else root
+            if not (base / member.linkname).resolve().is_relative_to(root):
+                raise ValueError(f"refusing to extract link {member.name!r} -> {member.linkname!r} outside {root}")
+        member.mode &= 0o755  # no setuid/setgid or group/other write, like the data filter
+        members.append(member)
+    tar.extractall(root, members=members)
 
 
 def is_test_path(path):
