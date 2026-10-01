@@ -58,6 +58,16 @@ class OpenCodeParseTest(unittest.TestCase):
         self.assertEqual(usage["cache_creation_input_tokens"], 10)
         self.assertAlmostEqual(usage["cost_usd"], 0.052)
 
+    def test_zero_cost_with_tokens_is_unknown_not_free(self):
+        # A model OpenCode has no price for reports cost 0 after spending tokens.
+        _, _, _, usage, _, _ = core.parse_opencode_output(stream(text(HANDOFF), finish("stop", cost=0)))
+        self.assertNotIn("cost_usd", usage)
+        self.assertEqual(usage["output_tokens"], 7)
+        # A step that spent nothing really cost nothing.
+        _, _, _, usage, _, _ = core.parse_opencode_output(stream(
+            text(HANDOFF), finish("stop", cost=0, input=0, output=0, cache={"read": 0, "write": 0})))
+        self.assertEqual(usage["cost_usd"], 0)
+
     def test_error_event_is_a_failure(self):
         output = stream({"type": "error", "sessionID": "ses_2",
                          "error": {"name": "APIError", "data": {"message": "429 Too Many Requests: rate limit"}}})

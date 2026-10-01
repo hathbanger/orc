@@ -1634,7 +1634,12 @@ def parse_opencode_output(stdout: str) -> tuple[str | None, str, str | None, dic
             error = event.get("error") if isinstance(event.get("error"), dict) else {}
             data = error.get("data") if isinstance(error.get("data"), dict) else {}
             failure = str(data.get("message") or error.get("message") or error.get("name") or "OpenCode reported an error")
-    if saw_cost:
+    # OpenCode reports cost 0 for a model it has no price for, even after
+    # spending tokens. Unreported cost is unknown, not zero: a $0 receipt
+    # would make budgets and cost-ranked routing treat the lane as free.
+    spent_tokens = any(usage.get(field) for field in ("input_tokens", "output_tokens", "reasoning_output_tokens",
+                                                      "cache_read_input_tokens", "cache_creation_input_tokens"))
+    if saw_cost and (cost > 0 or not spent_tokens):
         usage["cost_usd"] = round(cost, 8)
     if not saw_event:
         return None, stdout.strip(), None, {}, None, []
