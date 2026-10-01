@@ -1297,6 +1297,87 @@ def lane_priors(gym, now=None):
             "priors": dict(sorted(priors.items()))}
 
 
+def read_priors_file(path):
+    value = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("schema") != PRIORS_SCHEMA or not isinstance(value.get("priors"), dict):
+        raise ValueError(f"{path} is not a {PRIORS_SCHEMA} file")
+    return value
+
+
+def merge_priors(inputs, renames=None, now=None):
+    """Pool priors from several machines: per lane (agent, model, effort) and
+    work class, weighted attempts and successes add up; means are weighted by
+    attempts. Route names are machine-local labels and are dropped, so the
+    result carries only lane identity and counts. `renames` maps model ids
+    (e.g. a private proxy's names to vendor ids) before pooling.
+
+    `inputs` is a list of (value, weight, label)."""
+    renames = renames or {}
+    merged, sources = {}, []
+    for value, weight, label in inputs:
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or weight < 0:
+            raise ValueError(f"weight for {label} must be a non-negative number")
+        sources.append({"input": label, "source": value.get("source"), "generated_at": value.get("generated_at"), "weight": weight})
+        for entry in value["priors"].values():
+            agent, _, model, effort = lane_tuple(entry)
+            model = renames.get(model, model)
+            key = ":".join(part for part in (agent, model, effort) if part)
+            into = merged.setdefault(key, {"agent": agent, "route": None, "model": model, "reasoning_effort": effort,
+                                           "gym_lanes": []})
+            into["gym_lanes"] = sorted(set(into["gym_lanes"]) | set(entry.get("gym_lanes") or []))
+            for work in sorted(set(WORK_CLASSES.values())):
+                stats = entry.get(work)
+                if not stats or not stats.get("attempts") or not weight:
+                    continue
+                attempts, successes = stats["attempts"] * weight, stats["successes"] * weight
+                cell = into.setdefault(work, {"attempts": 0.0, "successes": 0.0, "mean_cost_usd": 0.0, "mean_seconds": 0.0,
+                                              "source": "merge", "generated_at": None, "sources": []})
+                total = cell["attempts"] + attempts
+                for mean in ("mean_cost_usd", "mean_seconds"):
+                    cell[mean] = round((cell[mean] * cell["attempts"] + (stats.get(mean) or 0) * attempts) / total, 4)
+                cell["attempts"], cell["successes"] = round(total, 3), round(cell["successes"] + successes, 3)
+                stamp = stats.get("generated_at") or value.get("generated_at")
+                cell["generated_at"] = max(filter(None, [cell["generated_at"], stamp]), default=None)
+                cell["sources"].append({"input": label, "attempts": stats["attempts"], "successes": stats["successes"], "weight": weight})
+    generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now if now is not None else time.time()))
+    return {"schema": PRIORS_SCHEMA, "source": "merge", "generated_at": generated_at, "inputs": sources,
+            "counted": {"merge": "weighted sums of each input's attempts and successes per lane and work class; route names dropped"},
+            "excluded": {}, "unsolved_by_all": {}, "priors": dict(sorted(merged.items()))}
+
+
+SEED_METRICS = {"coding": "codingIndex", "agentic": "agenticIndex", "intelligence": "intelligenceIndex"}
+
+
+def seed_priors(quality, mapping, metric="coding", attempts=4, now=None):
+    """Starting priors from a public leaderboard (data/quality.json): each mapped
+    lane gets `attempts` pseudo-attempts on `write` at the model's index / 100.
+    Kept deliberately small, so a few verified outcomes outweigh it.
+
+    `mapping` is {(agent, model, effort): leaderboard slug}."""
+    field = SEED_METRICS.get(metric)
+    if field is None:
+        raise ValueError(f"metric must be one of {', '.join(SEED_METRICS)}")
+    if isinstance(attempts, bool) or not isinstance(attempts, (int, float)) or attempts <= 0:
+        raise ValueError("attempts must be a positive number")
+    records = {r.get("slug"): r for r in quality.get("records") or [] if isinstance(r, dict)}
+    priors, missing = {}, []
+    for (agent, model, effort), slug in mapping.items():
+        score = (records.get(slug) or {}).get(field)
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            missing.append(slug)
+            continue
+        rate = max(0.0, min(1.0, score / 100))
+        key = ":".join(part for part in (agent, model, effort) if part)
+        priors[key] = {"agent": agent, "route": None, "model": model, "reasoning_effort": effort, "gym_lanes": [],
+                       "write": {"attempts": attempts, "successes": round(attempts * rate, 3), "mean_cost_usd": 0.0,
+                                 "mean_seconds": 0.0, "source": f"seed:{quality.get('source', 'leaderboard')}#{slug}.{field}",
+                                 "generated_at": quality.get("fetchedAt")}}
+    generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now if now is not None else time.time()))
+    return {"schema": PRIORS_SCHEMA, "source": "seed", "generated_at": generated_at,
+            "counted": {"write": f"{attempts} pseudo-attempts at {field} / 100 from {quality.get('source')} ({quality.get('fetchedAt')})"},
+            "excluded": {}, "unsolved_by_all": {}, "missing": sorted(missing), "priors": dict(sorted(priors.items()))}
+
+
 def write_priors(value, path):
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1534,6 +1615,20 @@ def add_parser(sub):
     priors_cmd.add_argument("gym_dir")
     priors_cmd.add_argument("--out", help="where to write them (default: lane_priors.json under ORC_HOME, "
                                           "~/.config/orc; `-` prints only)")
+    merge_cmd = commands.add_parser("priors-merge", help="pool priors files from several machines into one (counts only, no route names)")
+    merge_cmd.add_argument("inputs", nargs="+", metavar="FILE[@WEIGHT]",
+                           help="priors files; append @0.5 to weight one (default 1)")
+    merge_cmd.add_argument("--rename", action="append", default=[], metavar="FROM=TO",
+                           help="rename a model id before pooling, e.g. a private proxy name to the vendor id (repeatable)")
+    merge_cmd.add_argument("--out", help="where to write the merged file (default: lane_priors.json under ORC_HOME; `-` prints only)")
+    seed_cmd = commands.add_parser("priors-seed", help="small starting priors for lanes from a public leaderboard (data/quality.json)")
+    seed_cmd.add_argument("--map", action="append", required=True, metavar="AGENT:MODEL[:EFFORT]=SLUG",
+                          help="a lane and its leaderboard slug, e.g. claude:claude-opus-5-5:high=claude-opus-5 (repeatable)")
+    seed_cmd.add_argument("--quality", default=str(Path(__file__).resolve().parent / "data" / "quality.json"),
+                          help="leaderboard file (default: the repo's data/quality.json)")
+    seed_cmd.add_argument("--metric", choices=sorted(SEED_METRICS), default="coding")
+    seed_cmd.add_argument("--attempts", type=float, default=4, help="pseudo-attempts per lane (default 4)")
+    seed_cmd.add_argument("--out", default="-", help="where to write the seed file (default `-`: print only)")
 
 
 def command(args, workspace, as_json=False, out=None):
@@ -1568,6 +1663,36 @@ def command(args, workspace, as_json=False, out=None):
         return 0
     if args.gym_command == "priors":
         value = lane_priors(args.gym_dir)
+        path = None if args.out == "-" else write_priors(value, args.out or default_priors_path())
+        print(json.dumps(value, indent=2) if as_json else
+              priors_table(value) + (f"\nwrote {path}" if path else ""), file=out)
+        return 0
+    if args.gym_command == "priors-seed":
+        mapping = {}
+        for item in args.map:
+            lane, sep, slug = item.partition("=")
+            parts = lane.split(":")
+            if not sep or not slug or len(parts) not in (2, 3) or not all(parts):
+                raise ValueError("--map takes AGENT:MODEL[:EFFORT]=SLUG")
+            mapping[(parts[0], parts[1], parts[2] if len(parts) == 3 else None)] = slug
+        value = seed_priors(json.loads(Path(args.quality).expanduser().read_text()), mapping, args.metric, args.attempts)
+        path = None if args.out == "-" else write_priors(value, args.out)
+        print(json.dumps(value, indent=2) if as_json else
+              priors_table(value) + (f"\nmissing from the leaderboard: {', '.join(value['missing'])}" if value["missing"] else "")
+              + (f"\nwrote {path}" if path else ""), file=out)
+        return 0
+    if args.gym_command == "priors-merge":
+        inputs = []
+        for spec in args.inputs:
+            path, _, weight = spec.rpartition("@") if "@" in spec and spec.rsplit("@", 1)[1].replace(".", "", 1).isdigit() else (spec, "", "1")
+            inputs.append((read_priors_file(path), float(weight), path))
+        renames = {}
+        for item in args.rename:
+            old, sep, new = item.partition("=")
+            if not sep or not old or not new:
+                raise ValueError("--rename takes FROM=TO")
+            renames[old] = new
+        value = merge_priors(inputs, renames)
         path = None if args.out == "-" else write_priors(value, args.out or default_priors_path())
         print(json.dumps(value, indent=2) if as_json else
               priors_table(value) + (f"\nwrote {path}" if path else ""), file=out)
