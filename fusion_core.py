@@ -241,6 +241,10 @@ def load_config(workspace: Path, control_workspace: Path | None = None) -> tuple
         # Controller policy must not replace worker commands or permissions.
         keys = {"routes", "decisions", "learning", "quota", "cache", "gym"}
         merged = deep_merge(merged, {key: value for key, value in parsed.items() if key in keys})
+    # `"routes": {"orc-free": null}` removes a route, including a built-in one
+    # that cannot work on a machine without its provider.
+    if isinstance(merged.get("routes"), dict):
+        merged["routes"] = {name: route for name, route in merged["routes"].items() if route is not None}
     execution_mode(merged)
     return merged, source
 

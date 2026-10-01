@@ -57,6 +57,17 @@ settings. Config-source reporting continues to identify the worker/global file.
 With no control-workspace flag or environment setting, storage and configuration
 remain worker-scoped; run receipts still include the absolute `workspace`.
 
+Setting a route to `null` removes it, including the built-in `orc-free`,
+`orc-best`, `codex-read` and `codex-write` routes, for example when there is no
+OpenRouter key on the machine. A later file can define it again:
+
+```json
+{"routes": {"orc-free": null, "orc-best": null}}
+```
+
+Ultra's default stages and `ultra --cheap-only` use `orc-free` and `orc-best`;
+set `ultra.stages` to other routes when removing them.
+
 The launcher uses a separate [`config.json` and project `.orc.json`](launcher.md#config).
 The checked-in [Fusion example](../.fusion.json.example) is a starting point, not a
 complete schema. Routes, account identity, quota thresholds and model/effort
