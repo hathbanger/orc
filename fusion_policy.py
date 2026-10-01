@@ -277,7 +277,7 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
     automatic = task.get("agent", "auto") == "auto" and not task.get("route")
     needs = set(task.get("needs") or []) if automatic else set()
     preferred = config.get("sidekick", "codex")
-    candidates = [(name, name, None) for name in dict.fromkeys([preferred, "codex", "claude", "agy", "grok"])]
+    candidates = [(name, name, None) for name in dict.fromkeys([preferred, "codex", "claude", "agy", "grok", "opencode"])]
     candidates += [(name, settings.get("agent"), name) for name, settings in config.get("routes", {}).items()]
     if task.get("prefer_different_agent"):
         candidates.sort(key=lambda item: item[1] == task["prefer_different_agent"])
@@ -288,7 +288,7 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         if key in unhealthy:
             drop(key, "a recent run on this lane hit a quota or permission limit")
             continue
-        if agent not in {"claude", "codex", "agy", "grok"}:
+        if agent not in {"claude", "codex", "agy", "grok", "opencode"}:
             continue
         settings = core.agent_settings(config, {"agent": agent, "route": route})
         lacks = settings.get("lacks") or []
@@ -297,6 +297,11 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         unmet = sorted(needs & set(lacks))
         if unmet:
             drop(key, "lacks " + ", ".join(unmet) + " this task needs")
+            continue
+        if agent == "opencode" and not settings.get("model"):
+            # OpenCode's own default model depends on user config and could be
+            # any provider; automatic routing needs a lane that names one.
+            drop(key, "OpenCode lanes need an explicit provider/model for automatic routing")
             continue
         quota = headroom.get(core.lane_key(agent, settings))
         if quota:
@@ -308,14 +313,18 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         if settings.get("reasoning_effort") is not None:
             from fusion_reasoning import native_capability, validate_pair
             try:
-                if agent not in {"codex", "claude", "agy"}:
-                    raise ValueError("reasoning effort requires native Codex, Claude Code or agy")
-                if agent in {"claude", "agy"}:
+                if agent not in {"codex", "claude", "agy", "opencode"}:
+                    raise ValueError("reasoning effort requires native Codex, Claude Code, agy or OpenCode")
+                if agent in {"claude", "agy", "opencode"}:
                     from fusion_reasoning import check_pair
                     check_pair(agent, settings)
                 if settings["reasoning_effort"] == "ultra" and (task.get("write") or settings.get("allow_native_delegation") is not True):
                     raise ValueError("ultra requires read-only scope and explicit native delegation")
-                native_capability(validate_pair(settings.get("model"), settings["reasoning_effort"]))
+                # OpenCode passes reasoning_effort as --variant; the provider validates
+                # it at request time.  Reading Codex's local models_cache.json for an
+                # OpenCode model id would always return 'unchecked' and is misleading.
+                if agent != "opencode":
+                    native_capability(validate_pair(settings.get("model"), settings["reasoning_effort"]))
             except ValueError as exc:
                 drop(key, str(exc))
                 continue
@@ -436,7 +445,7 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
     return rank_by_quota(overflow_only(config, choices, drop) if automatic else choices)
 
 
-AGENTS = ("codex", "claude", "agy", "grok")
+AGENTS = ("codex", "claude", "agy", "grok", "opencode")
 
 
 def auto_pool(config, task):
@@ -572,7 +581,7 @@ def route_task(config, task, store, rng=None):
     quota_audit, rejected = {}, {}
     if task["agent"] == "auto" and task.get("route"):
         task["agent"] = config.get("routes", {}).get(task["route"], {}).get("agent")
-        if task["agent"] not in {"codex", "claude", "agy", "grok"}:
+        if task["agent"] not in {"codex", "claude", "agy", "grok", "opencode"}:
             raise ValueError("automatic task specifies an unknown route")
     if not automatic and engine.options["mode"] == "off":
         return
@@ -605,7 +614,7 @@ def route_task(config, task, store, rng=None):
         else:
             from fusion_reasoning import pair_candidates, pair_key
             settings = core.agent_settings(config, task)
-            pairs = pair_candidates(config, settings, task.get("write", False), task["agent"]) if task["agent"] in {"codex", "claude", "agy"} and settings.get("reasoning_effort") is not None else []
+            pairs = pair_candidates(config, settings, task.get("write", False), task["agent"]) if task["agent"] in {"codex", "claude", "agy", "opencode"} and settings.get("reasoning_effort") is not None else []
             # A named route with several arms still chooses a model inside that
             # route; the lane itself is never substituted.
             arms = [] if pairs or not task.get("route") or settings.get("model") or int(settings.get("arms", 1)) < 2 else [

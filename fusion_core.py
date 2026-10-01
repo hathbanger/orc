@@ -141,6 +141,25 @@ DEFAULTS: dict[str, Any] = {
         "permission_mode": "plan",
         "model": "",
     },
+    # OpenCode (`opencode run --format json`). Any provider OpenCode is
+    # configured for works through `model: "provider/model"`. Provider keys
+    # and model lists live in the user's own OpenCode/Fusion config; `command`
+    # may point at a local wrapper that exports them.
+    # Permissions are applied through OPENCODE_PERMISSION, merged over the
+    # user's own opencode.json(c): readers get deny-by-default, writers get
+    # edits plus `bash_allow`, everything else would ask and a headless run
+    # auto-rejects it. `permission` merges extra rules over that policy,
+    # `disable_mcp` turns named MCP servers off for workers and `config`
+    # is merged into OPENCODE_CONFIG_CONTENT.
+    "opencode": {
+        "command": "opencode",
+        "model": "",
+        "agent": "",
+        "disable_mcp": [],
+        "bash_allow": [],
+        "permission": {},
+        "config": {},
+    },
 }
 
 AGY_MODE_ALIASES = {
@@ -664,6 +683,9 @@ def _denial_name(item: Any) -> str | None:
 
 
 def provider_denials(agent: str, stdout: str) -> list[dict[str, str]]:
+    if agent == "opencode":
+        return [{"tool": names[0], "input_head": item["input_head"]}
+                for item in opencode_denials(stdout) if (names := normalize_tools([item["tool"]]))]
     if agent not in {"claude", "agy"}:
         return []
     try:
@@ -1506,6 +1528,174 @@ def parse_agy_output(stdout: str) -> tuple[str | None, str, str | None, dict[str
     return session_id, text, failure, usage, model, denial_notes
 
 
+_OPENCODE_DENIAL = re.compile(r"rejected permission|specified a rule which prevents|permission denied", re.IGNORECASE)
+
+
+def _opencode_events(stdout: str):
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def opencode_denials(stdout: str) -> list[dict[str, str]]:
+    """Tool calls OpenCode refused: an explicit deny rule, or an `ask` that a
+    headless `opencode run` auto-rejects."""
+    denied = []
+    for event in _opencode_events(stdout):
+        part = event.get("part") if event.get("type") == "tool_use" else None
+        state = part.get("state") if isinstance(part, dict) else None
+        if not isinstance(state, dict) or state.get("status") != "error":
+            continue
+        if not _OPENCODE_DENIAL.search(str(state.get("error") or "")):
+            continue
+        tool_input = state.get("input")
+        head = json.dumps(tool_input, ensure_ascii=False, separators=(",", ":")) if isinstance(tool_input, (dict, list)) else str(tool_input or "")
+        denied.append({"tool": str(part.get("tool") or "tool"), "input_head": head[:120]})
+    return denied
+
+
+def parse_opencode_output(stdout: str) -> tuple[str | None, str, str | None, dict[str, Any], str | None, list[str]]:
+    """`opencode run --format json`: one JSON event per line.
+
+    The handoff is the text of the final step (text emitted before the last
+    tool call is commentary). Usage sums every step_finish; a run whose last
+    step stopped for tool calls, or that reported an error event, did not
+    finish its turn.
+    """
+    session_id = None
+    text: list[str] = []
+    failure = None
+    usage: dict[str, Any] = {}
+    cost = 0.0
+    saw_cost = False
+    last_reason = None
+    saw_event = False
+    for event in _opencode_events(stdout):
+        saw_event = True
+        session_id = session_id or event.get("sessionID")
+        kind = event.get("type")
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if kind == "text" and isinstance(part.get("text"), str):
+            text.append(part["text"])
+        elif kind == "tool_use":
+            text = []
+        elif kind == "step_finish":
+            last_reason = part.get("reason")
+            tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+            cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+            for field, value in (("input_tokens", tokens.get("input")), ("output_tokens", tokens.get("output")),
+                                 ("reasoning_output_tokens", tokens.get("reasoning")),
+                                 ("cache_read_input_tokens", cache.get("read")),
+                                 ("cache_creation_input_tokens", cache.get("write"))):
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    usage[field] = usage.get(field, 0) + value
+            if isinstance(part.get("cost"), (int, float)) and not isinstance(part.get("cost"), bool):
+                cost += part["cost"]
+                saw_cost = True
+        elif kind == "error":
+            error = event.get("error") if isinstance(event.get("error"), dict) else {}
+            data = error.get("data") if isinstance(error.get("data"), dict) else {}
+            failure = str(data.get("message") or error.get("message") or error.get("name") or "OpenCode reported an error")
+    if saw_cost:
+        usage["cost_usd"] = round(cost, 8)
+    if not saw_event:
+        return None, stdout.strip(), None, {}, None, []
+    # 'unknown' is a valid terminal reason (like 'stop'); only 'tool-calls' means
+    # the model was mid-flight and did not write a handoff.
+    if not failure and last_reason not in (None, "stop", "unknown", "end_turn", "end-turn") and not "".join(text).strip():
+        failure = f"OpenCode stopped without a final answer (last step: {last_reason})"
+    notes = [f"permission denied: {item['tool']}: {item['input_head']}" for item in opencode_denials(stdout)]
+    return session_id, "".join(text).strip(), failure, usage, None, notes
+
+
+def opencode_permission(settings: dict[str, Any], task: dict[str, Any], yolo: bool) -> dict[str, Any]:
+    """The OPENCODE_PERMISSION policy for one worker.
+
+    OpenCode deep-merges this over the user's config and the last matching
+    rule wins, so readers also get trailing denies for shell redirection and
+    in-place writers that a user's `echo *`-style allow would otherwise pass.
+    Nothing is left at `ask`: a headless run auto-rejects an ask and a
+    rejection ends the turn, whereas a deny is returned to the model, which
+    can work around it and still write its handoff.
+    This is permission-rule isolation, not an OS sandbox.
+    """
+    if yolo:
+        policy: dict[str, Any] = {"*": "allow", "edit": "allow", "bash": "allow", "webfetch": "allow",
+                                  "external_directory": "allow"}
+    else:
+        read_bash = {"*": "deny"}
+        for command in ("git status", "git diff", "git log", "git show", "git branch", "git rev-parse",
+                        "git ls-files", "git blame", "ls", "pwd", "cd"):
+            read_bash[command] = "allow"
+            read_bash[command + " *"] = "allow"
+            if command.startswith("git "):
+                read_bash["git -C * " + command[4:] + "*"] = "allow"
+        write_denies = {"*>*": "deny", "*tee *": "deny", "*sed -i*": "deny", "*-delete*": "deny",
+                        "*-exec *": "deny", "git push*": "deny"}
+        base = {"*": "deny", "read": "allow", "glob": "allow", "grep": "allow", "list": "allow",
+                "lsp": "allow", "todowrite": "allow", "todoread": "allow", "skill": "allow",
+                "task": "deny", "question": "deny", "webfetch": "deny", "websearch": "deny",
+                "external_directory": "deny", "doom_loop": "deny"}
+        if task["write"]:
+            bash = {"*": "deny", **{key: value for key, value in read_bash.items() if key != "*"}, "git *": "allow"}
+            for item in [*(settings.get("bash_allow") or []), *(shlex.join(argv) for argv in task.get("verification_argv") or [])]:
+                bash[str(item)] = "allow"
+                bash[str(item) + " *"] = "allow"
+            bash["git push*"] = "deny"
+            policy = {**base, "edit": "allow", "bash": bash}
+        else:
+            policy = {**base, "edit": "deny", "bash": {**read_bash, **write_denies}}
+    extra = settings.get("permission") or {}
+    if not isinstance(extra, dict):
+        raise ValueError("opencode.permission must be an object of OpenCode permission rules")
+    merged = deep_merge(policy, extra)
+    if not yolo:
+        # Re-apply core safety denies after user extras so a misconfigured
+        # route `permission` block cannot promote a read-only worker to a
+        # writer or re-enable tunnelling tools.  OpenCode's last-matching-rule
+        # semantics mean entries appended here always win.
+        if not task["write"]:
+            merged["edit"] = "deny"
+            merged["task"] = "deny"
+            merged["external_directory"] = "deny"
+        bash = merged.get("bash")
+        # A string replaces OpenCode's whole bash ruleset; keep it expressible
+        # as rules so the trailing denies below still apply.
+        bash = dict(bash) if isinstance(bash, dict) else {"*": bash if isinstance(bash, str) else "deny"}
+        # Re-insert rather than update: an existing key keeps its position,
+        # and a later user rule would otherwise still win.
+        for pattern, action in [*(() if task["write"] else write_denies.items()), ("git push*", "deny")]:
+            bash.pop(pattern, None)
+            bash[pattern] = action
+        merged["bash"] = bash
+    return merged
+
+
+def opencode_config_content(settings: dict[str, Any], env: dict[str, str]) -> str | None:
+    content: dict[str, Any] = {}
+    if env.get("OPENCODE_CONFIG_CONTENT"):
+        try:
+            existing = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        except ValueError as exc:
+            raise ValueError("OPENCODE_CONFIG_CONTENT in the worker environment is not valid JSON") from exc
+        if isinstance(existing, dict):
+            content = existing
+    names = settings.get("disable_mcp") or []
+    if not isinstance(names, list) or not all(isinstance(item, str) and item for item in names):
+        raise ValueError("opencode.disable_mcp must be a list of MCP server names")
+    if names:
+        content = deep_merge(content, {"mcp": {name: {"enabled": False} for name in names}})
+    extra = settings.get("config") or {}
+    if not isinstance(extra, dict):
+        raise ValueError("opencode.config must be an object of OpenCode config")
+    content = deep_merge(content, extra)
+    return json.dumps(content, separators=(",", ":")) if content else None
+
+
 def agent_settings(config: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
     agent = task["agent"]
     settings = deep_merge({}, config.get(agent, {}))
@@ -1718,8 +1908,8 @@ def agent_command(
 ) -> tuple[list[str], dict[str, str], dict[str, Any]]:
     agent = task["agent"]
     settings = agent_settings(config, task)
-    if settings.get("reasoning_effort") is not None and agent not in {"codex", "claude", "agy"}:
-        raise ValueError("reasoning_effort is currently supported only for native Codex, Claude Code and agy")
+    if settings.get("reasoning_effort") is not None and agent not in {"codex", "claude", "agy", "opencode"}:
+        raise ValueError("reasoning_effort is currently supported only for native Codex, Claude Code, agy and OpenCode")
     yolo = execution_mode(config) == "yolo"
     env = os.environ.copy()
     if agent == "claude" and not metered(settings):
@@ -1793,6 +1983,35 @@ def agent_command(
         if settings.get("model"):
             argv += ["--model", settings["model"]]
         return argv, env, {"command": command, "model": settings.get("model") or "", "output_format": output_format}
+    if agent == "opencode":
+        command = settings.get("command", "opencode")
+        env["OPENCODE_PERMISSION"] = json.dumps(opencode_permission(settings, task, yolo), separators=(",", ":"))
+        content = opencode_config_content(settings, env)
+        if content:
+            env["OPENCODE_CONFIG_CONTENT"] = content
+        argv = [command, "run", "--format", "json", "--dir", task["workspace"]]
+        if yolo:
+            argv.append("--auto")
+        selected_model = str(settings.get("model") or "")
+        if selected_model:
+            if "/" not in selected_model:
+                raise ValueError("OpenCode models are provider/model, e.g. anthropic/claude-sonnet-4-6")
+            argv += ["-m", selected_model]
+        if settings.get("agent"):
+            argv += ["--agent", str(settings["agent"])]
+        choice = None
+        if settings.get("reasoning_effort") is not None:
+            from fusion_reasoning import check_pair, recorded_choice
+            choice = recorded_choice(check_pair("opencode", settings),
+                                     {"status": "unchecked", "reason": "OpenCode variants are provider-specific; the provider validates them"})
+            argv += ["--variant", settings["reasoning_effort"]]
+        if session_id:
+            argv += ["--session", session_id]
+        # The prompt is positional; `--` keeps a brief that starts with a dash
+        # from being read as an option.
+        argv += ["--", brief_for(task)]
+        return argv, env, {"command": command, "model": selected_model,
+                           **({"execution_choice": choice} if choice else {})}
     if agent == "claude":
         command = settings.get("command", "claude")
         command_name = Path(command).name
@@ -1951,7 +2170,7 @@ def dispatch(
     route_task(config, task, store)
     # Pinned choices do not resume a session created for a different pair.
     # Keep legacy session keys unchanged when effort is inherited.
-    if task["agent"] in {"codex", "claude", "agy"}:
+    if task["agent"] in {"codex", "claude", "agy", "opencode"}:
         settings = agent_settings(config, task)
         if settings.get("reasoning_effort") is not None:
             from fusion_reasoning import pair_key, validate_pair
@@ -2061,6 +2280,10 @@ def dispatch(
             new_session, summary, failure, usage, event_model, evidence_notes = parse_agy_output(completed.stdout)
         elif task["agent"] == "grok":
             new_session, summary, failure, usage, event_model, evidence_notes = parse_grok_output(completed.stdout, metadata.get("output_format", "plain"))
+            if exit_code != 0 and completed.stderr.strip():
+                failure = failure or compact(progress.clean(completed.stderr), 1500)
+        elif task["agent"] == "opencode":
+            new_session, summary, failure, usage, event_model, evidence_notes = parse_opencode_output(completed.stdout)
             if exit_code != 0 and completed.stderr.strip():
                 failure = failure or compact(progress.clean(completed.stderr), 1500)
         else:
@@ -2352,7 +2575,7 @@ def tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "agent": {"type": "string", "enum": ["auto", "codex", "claude", "agy", "grok"]},
+                    "agent": {"type": "string", "enum": ["auto", "codex", "claude", "agy", "grok", "opencode"]},
                     "task": {"type": "string"},
                     "role": {"type": "string", "default": "implementation"},
                     "success_criteria": {"type": "array", "items": {"type": "string"}},
@@ -2517,7 +2740,7 @@ def run_mcp(workspace: Path, config: dict[str, Any]) -> int:
                     elif name == "fusion_delegate":
                         timeout_seconds = validate_timeout(args["timeout_seconds"]) if "timeout_seconds" in args else None
                         agent = args.get("agent")
-                        if agent not in {"auto", "codex", "claude", "agy", "grok"}:
+                        if agent not in {"auto", "codex", "claude", "agy", "grok", "opencode"}:
                             raise ValueError("agent must be auto, codex, claude, agy, or grok")
                         target = workspace_path(args["workspace"]) if args.get("workspace") else workspace
                         if target != workspace:
@@ -2665,6 +2888,53 @@ def launch_lead(workspace: Path, config: dict[str, Any], agent: str, task: str |
         if read_only:
             env["FUSION_READ_ONLY"] = "1"
         return subprocess.run(argv, cwd=workspace, env=env, check=False).returncode
+    if agent == "opencode":
+        settings = config.get("opencode", {})
+        # Validate before anything is written or started.
+        flags = ["--auto"] if yolo else []
+        if settings.get("model"):
+            if "/" not in str(settings["model"]):
+                raise ValueError("OpenCode models are provider/model, e.g. anthropic/claude-sonnet-4-6")
+            flags += ["-m", str(settings["model"])]
+        if settings.get("agent"):
+            flags += ["--agent", str(settings["agent"])]
+        if settings.get("reasoning_effort") is not None:
+            from fusion_reasoning import check_pair
+            check_pair("opencode", settings)
+            flags += ["--variant", str(settings["reasoning_effort"])]
+        command = executable(settings.get("command", "opencode"))
+        if not command:
+            print(f"fusion: {settings.get('command', 'opencode')} is not available on PATH", file=sys.stderr)
+            return 127
+        script = Path(__file__).resolve().parent / "fusion"
+        server_env = {"FUSION_WORKSPACE": str(workspace), **({"FUSION_CONTROL_WORKSPACE": str(control)} if control is not None else {}),
+                      **({"FUSION_READ_ONLY": "1"} if read_only else {})}
+        # OpenCode has no --append-system-prompt; `instructions` files are
+        # appended to its system prompt the way AGENTS.md is.
+        prompt = tempfile.NamedTemporaryFile(mode="w", suffix=".md", prefix="fusion-lead-", delete=False, encoding="utf-8")
+        prompt.write(LEAD_PROMPT + "\n")
+        prompt.close()
+        env = os.environ.copy()
+        env.update(route_env(settings))
+        env.update(server_env)
+        content = json.loads(opencode_config_content(settings, env) or "{}")
+        content = deep_merge(content, {
+            "mcp": {"fusion": {"type": "local", "command": [sys.executable, str(script), "mcp-serve"],
+                               "environment": server_env, "enabled": True}},
+            "instructions": [*(content.get("instructions") or []), prompt.name]})
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps(content, separators=(",", ":"))
+        if yolo or read_only or not interactive:
+            policy = opencode_permission(settings, {"write": not read_only, "verification_argv": []}, yolo)
+            if not yolo:
+                policy = deep_merge(policy, {"fusion_*": "allow"})
+            env["OPENCODE_PERMISSION"] = json.dumps(policy, separators=(",", ":"))
+        argv = ([command] if interactive else [command, "run", "--format", "json"]) + flags
+        if task:
+            argv += ["--prompt", task] if interactive else ["--", task]
+        try:
+            return subprocess.run(argv, cwd=workspace, env=env, check=False).returncode
+        finally:
+            Path(prompt.name).unlink(missing_ok=True)
     if agent == "agy":
         raise SystemExit("fusion: agy can be a sidekick, workflow node, or Ultra harness, but not (yet) the interactive lead")
     raise SystemExit(f"fusion: unsupported lead agent {agent}")
@@ -2698,7 +2968,7 @@ def print_ultra_result(result: dict[str, Any], as_json: bool) -> None:
 
 def doctor(workspace: Path, config: dict[str, Any]) -> int:
     checks = []
-    for agent in ("claude", "codex", "agy", "grok"):
+    for agent in ("claude", "codex", "agy", "grok", "opencode"):
         command = config.get(agent, {}).get("command", agent)
         path = executable(command)
         checks.append(
@@ -2756,11 +3026,11 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--no-open", action="store_true", help="print the URL without opening a browser")
 
     lead = sub.add_parser("lead", help="launch an interactive lead agent with the Fusion MCP server")
-    lead.add_argument("--agent", choices=["claude", "codex"], help="lead agent; defaults to .fusion.json or claude")
+    lead.add_argument("--agent", choices=["claude", "codex", "opencode"], help="lead agent; defaults to .fusion.json or claude")
     lead.add_argument("task", nargs="?", help="optional initial task")
 
     build = sub.add_parser("build", help="turn a feature idea into an interactive build, with planning and review instructions included")
-    build.add_argument("--agent", choices=["claude", "codex"], default="codex", help="lead agent (default: codex)")
+    build.add_argument("--agent", choices=["claude", "codex", "opencode"], default="codex", help="lead agent (default: codex)")
     build.add_argument("--kind", choices=["discovery", "build", "debug", "review", "sweep"], help="explicit workflow; planning-only requests remain read-only")
     build.add_argument("--kind-source", choices=["user", "agent"], default="user", help=argparse.SUPPRESS)
     build.add_argument(
@@ -2785,11 +3055,11 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("idea", nargs="?", help="describe a feature, or add constraints to --from-workflow")
 
     run = sub.add_parser("run", help="launch a non-interactive lead turn with the Fusion MCP server")
-    run.add_argument("--agent", choices=["claude", "codex"], help="lead agent; defaults to .fusion.json or claude")
+    run.add_argument("--agent", choices=["claude", "codex", "opencode"], help="lead agent; defaults to .fusion.json or claude")
     run.add_argument("task", help="initial task for the lead")
 
     delegate = sub.add_parser("delegate", help="run one bounded sidekick task")
-    delegate.add_argument("--agent", choices=["auto", "claude", "codex", "agy", "grok"], help="worker agent; defaults to the named route agent")
+    delegate.add_argument("--agent", choices=["auto", "claude", "codex", "agy", "grok", "opencode"], help="worker agent; defaults to the named route agent")
     delegate.add_argument("--role", default="implementation")
     delegate.add_argument("--needs", action="append", type=cli_need, default=[], metavar="NAME",
                           help="capability the task needs from its lane, such as local_server (repeatable); auto skips lanes whose config lacks it")
@@ -2818,7 +3088,7 @@ def build_parser() -> argparse.ArgumentParser:
     ultra = sub.add_parser("ultra", help="run a bounded UltraCode-style explore/plan/implement/review pipeline")
     ultra.add_argument("--stages", type=int, help="maximum number of configured stages")
     ultra.add_argument("--cheap-only", action="store_true", help="force Claude stages onto the orc-free route")
-    ultra.add_argument("--harness", choices=["claude", "codex", "agy", "grok"], help="run every Ultra stage through one harness")
+    ultra.add_argument("--harness", choices=["claude", "codex", "agy", "grok", "opencode"], help="run every Ultra stage through one harness")
     ultra.add_argument("task", help="task for the pipeline")
 
     workflow = sub.add_parser("workflow", help="run a persisted bounded Fusion DAG")
@@ -2831,7 +3101,7 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_resume = workflow_sub.add_parser("resume", help="resume a paused or failed workflow")
     workflow_resume.add_argument("run_id")
     workflow_resume.add_argument("--node", help="unfinished stage to retry with a different worker")
-    workflow_resume.add_argument("--agent", choices=["auto", "claude", "codex", "agy", "grok"])
+    workflow_resume.add_argument("--agent", choices=["auto", "claude", "codex", "agy", "grok", "opencode"])
     workflow_resume.add_argument("--route", help="configured route to use for the selected stage")
     workflow_resume.add_argument("--max-attempts", type=int, help="new explicit attempt limit per stage")
     workflow_resume.add_argument(
@@ -3146,7 +3416,7 @@ def _main(args, parser) -> int:
             args.agent = route.get("agent")
             if not args.agent:
                 parser.error(f"route {args.route} has no agent; specify --agent")
-            if args.agent not in {"auto", "claude", "codex", "agy", "grok"}:
+            if args.agent not in {"auto", "claude", "codex", "agy", "grok", "opencode"}:
                 parser.error(f"route {args.route} has an invalid agent: {args.agent}")
         task = make_task(
             workspace,

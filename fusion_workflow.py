@@ -286,7 +286,7 @@ def expand_spec(spec: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list[st
                 raise ValueError(f"workflow node {node['id']} depends on unknown node {dependency_id}")
         node["needs"] = list(dict.fromkeys(needs))
         node["agent"] = str(node.get("agent", "claude"))
-        if node["agent"] not in {"auto", "claude", "codex", "agy", "grok"}:
+        if node["agent"] not in {"auto", "claude", "codex", "agy", "grok", "opencode"}:
             raise ValueError(f"workflow node {node['id']} has unsupported agent {node['agent']}")
         node["role"] = str(node.get("role", node["id"]))
         node["write"] = bool(node.get("write", False))
@@ -395,8 +395,8 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
         visit(node["id"])
         if "reasoning_effort" in node:
             from fusion_reasoning import EFFORTS
-            if node["agent"] not in {"codex", "claude", "agy"} or not isinstance(node["reasoning_effort"], str) or node["reasoning_effort"] not in EFFORTS:
-                raise ValueError("workflow reasoning_effort requires an explicit Codex, Claude or agy node and a supported effort")
+            if node["agent"] not in {"codex", "claude", "agy", "opencode"} or not isinstance(node["reasoning_effort"], str) or node["reasoning_effort"] not in EFFORTS:
+                raise ValueError("workflow reasoning_effort requires an explicit Codex, Claude, agy or OpenCode node and a supported effort")
         if "allow_native_delegation" in node and (node["agent"] != "codex" or not isinstance(node["allow_native_delegation"], bool)):
             raise ValueError("allow_native_delegation requires an explicit Codex node and boolean")
         before = node["acceptance"].get("before") if isinstance(node.get("acceptance"), dict) else None

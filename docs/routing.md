@@ -5,6 +5,7 @@
 - [Automatic and explicit choices](#automatic-and-explicit-choices)
 - [Cost tie-breakers](#cost-tie-breakers)
 - [Accounts and quota headroom](#accounts-and-quota-headroom)
+- [OpenCode lanes](#opencode-lanes)
 - [Antigravity lanes](#antigravity-lanes)
 - [Prompt cache and sessions](#prompt-cache-and-sessions)
 - [Gym lane priors](#gym-lane-priors)
@@ -167,6 +168,33 @@ a recorded lane key cannot constrain unrelated accounts. Routing logs and
 `fusion decisions routing-report` include quota windows, classifications,
 thresholds, and reasons for demotions and exclusions, even before an outcome
 is recorded. These quota decisions are logged even with decision advice off.
+
+## OpenCode lanes
+
+`opencode` (`opencode run --format json`) is a fifth worker harness that routes
+any provider OpenCode supports — Anthropic, OpenAI, Google, and xAI — through
+the `provider/model` `model` key. It runs as a sidekick (`--agent opencode`), a
+workflow node, an Ultra stage/harness, or an interactive lead
+(`fusion lead --agent opencode`). Sessions resume through `--session` the same
+way Codex threads do.
+
+```sh
+fusion delegate --agent opencode --route oc-sonnet --read-only \
+  "Review the current diff and return the five-field handoff."
+fusion --json ultra --harness opencode 'Explore and review this change.'
+```
+
+**Automatic routing requires an explicit `model`** (`provider/model`). Without
+one, Fusion cannot know which provider the lane will use and excludes it from
+automatic candidacy with the message `OpenCode lanes need an explicit
+provider/model for automatic routing`.
+
+`reasoning_effort` on an OpenCode lane passes `--variant` to `opencode run`.
+The value is forwarded unchecked to the provider; OpenCode and the upstream
+provider validate it at request time. The Codex local capability cache is not
+consulted. See [OpenCode and --variant](model-effort.md#opencode).
+
+For keys, wrappers and per-provider routes see [OpenCode settings](configuration.md#opencode-settings).
 
 ## Antigravity lanes
 

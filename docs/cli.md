@@ -70,7 +70,8 @@ after its name. Aliases and hidden subcommands are included below.
 ```text
 usage: fusion [-h] [--workspace WORKSPACE] [--control-workspace CONTROL_WORKSPACE]
               [--json] [--progress | --quiet]
-              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,mcp-serve} ...
+              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,mcp-serve}
+              ...
 
 Lead/sidekick orchestration for Claude Code, Codex CLI, and Antigravity CLI
 
@@ -134,7 +135,8 @@ investigate open issues; save a shortlist without implementing
 
 ```text
 usage: fusion truffle hunt [-h] [--count COUNT] [--scan-limit SCAN_LIMIT]
-                           [--search SEARCH] [--agent {agy,auto,claude,codex,grok}]
+                           [--search SEARCH]
+                           [--agent {agy,auto,claude,codex,grok,opencode}]
                            [--route ROUTE] [--model MODEL] [--remote REMOTE]
                            [--include-assigned]
 
@@ -143,7 +145,7 @@ options:
   --count COUNT
   --scan-limit SCAN_LIMIT
   --search SEARCH
-  --agent {agy,auto,claude,codex,grok}
+  --agent {agy,auto,claude,codex,grok,opencode}
   --route ROUTE           named route from .fusion.json, for example orc-free
   --model MODEL           model for the scout, overriding the route and agent settings
   --remote REMOTE
@@ -155,13 +157,14 @@ options:
 map every open issue into tracking patches and grade in resumable batches
 
 ```text
-usage: fusion truffle survey [-h] [--agent {agy,auto,claude,codex,grok}] [--route ROUTE]
-                             [--model MODEL] [--remote REMOTE] [--resume RESUME]
-                             [--sync-only] [--include-assigned] [--takeover]
+usage: fusion truffle survey [-h] [--agent {agy,auto,claude,codex,grok,opencode}]
+                             [--route ROUTE] [--model MODEL] [--remote REMOTE]
+                             [--resume RESUME] [--sync-only] [--include-assigned]
+                             [--takeover]
 
 options:
   -h, --help              show this help message and exit
-  --agent {agy,auto,claude,codex,grok}
+  --agent {agy,auto,claude,codex,grok,opencode}
   --route ROUTE           named route from .fusion.json, for example orc-free
   --model MODEL           model for grading, overriding the route and agent settings
   --remote REMOTE
@@ -224,14 +227,15 @@ options:
 launch an interactive lead agent with the Fusion MCP server
 
 ```text
-usage: fusion lead [-h] [--agent {claude,codex}] [task]
+usage: fusion lead [-h] [--agent {claude,codex,opencode}] [task]
 
 positional arguments:
   task                    optional initial task
 
 options:
   -h, --help              show this help message and exit
-  --agent {claude,codex}  lead agent; defaults to .fusion.json or claude
+  --agent {claude,codex,opencode}
+                          lead agent; defaults to .fusion.json or claude
 ```
 
 ## fusion build
@@ -239,7 +243,7 @@ options:
 turn a feature idea into an interactive build, with planning and review instructions included
 
 ```text
-usage: fusion build [-h] [--agent {claude,codex}]
+usage: fusion build [-h] [--agent {claude,codex,opencode}]
                     [--kind {discovery,build,debug,review,sweep}] [--across DIMENSION]
                     [--plan-only | --execute] [--budget-usd BUDGET_USD]
                     [--max-attempts MAX_ATTEMPTS] [--publish {off,manual,auto}]
@@ -252,7 +256,8 @@ positional arguments:
 
 options:
   -h, --help              show this help message and exit
-  --agent {claude,codex}  lead agent (default: codex)
+  --agent {claude,codex,opencode}
+                          lead agent (default: codex)
   --kind {discovery,build,debug,review,sweep}
                           explicit workflow; planning-only requests remain read-only
   --across DIMENSION      fan one read-only worker out per dimension, then synthesize
@@ -283,14 +288,15 @@ options:
 launch a non-interactive lead turn with the Fusion MCP server
 
 ```text
-usage: fusion run [-h] [--agent {claude,codex}] task
+usage: fusion run [-h] [--agent {claude,codex,opencode}] task
 
 positional arguments:
   task                    initial task for the lead
 
 options:
   -h, --help              show this help message and exit
-  --agent {claude,codex}  lead agent; defaults to .fusion.json or claude
+  --agent {claude,codex,opencode}
+                          lead agent; defaults to .fusion.json or claude
 ```
 
 ## fusion delegate
@@ -298,9 +304,10 @@ options:
 run one bounded sidekick task
 
 ```text
-usage: fusion delegate [-h] [--agent {auto,claude,codex,agy,grok}] [--role ROLE]
-                       [--needs NAME] [--timeout SECONDS] [--read-only] [--fresh]
-                       [--session-key SESSION_KEY] [--route ROUTE] [--model MODEL]
+usage: fusion delegate [-h] [--agent {auto,claude,codex,agy,grok,opencode}]
+                       [--role ROLE] [--needs NAME] [--timeout SECONDS] [--read-only]
+                       [--fresh] [--session-key SESSION_KEY] [--route ROUTE]
+                       [--model MODEL]
                        [--reasoning-effort {high,low,max,medium,minimal,none,ultra,xhigh}]
                        [--success SUCCESS] [--constraint CONSTRAINT]
                        task
@@ -310,7 +317,7 @@ positional arguments:
 
 options:
   -h, --help              show this help message and exit
-  --agent {auto,claude,codex,agy,grok}
+  --agent {auto,claude,codex,agy,grok,opencode}
                           worker agent; defaults to the named route agent
   --role ROLE
   --needs NAME            capability the task needs from its lane, such as local_server
@@ -360,7 +367,7 @@ run a bounded UltraCode-style explore/plan/implement/review pipeline
 
 ```text
 usage: fusion ultra [-h] [--stages STAGES] [--cheap-only]
-                    [--harness {claude,codex,agy,grok}]
+                    [--harness {claude,codex,agy,grok,opencode}]
                     task
 
 positional arguments:
@@ -370,7 +377,7 @@ options:
   -h, --help              show this help message and exit
   --stages STAGES         maximum number of configured stages
   --cheap-only            force Claude stages onto the orc-free route
-  --harness {claude,codex,agy,grok}
+  --harness {claude,codex,agy,grok,opencode}
                           run every Ultra stage through one harness
 ```
 
@@ -443,7 +450,8 @@ options:
 resume a paused or failed workflow
 
 ```text
-usage: fusion workflow resume [-h] [--node NODE] [--agent {auto,claude,codex,agy,grok}]
+usage: fusion workflow resume [-h] [--node NODE]
+                              [--agent {auto,claude,codex,agy,grok,opencode}]
                               [--route ROUTE] [--max-attempts MAX_ATTEMPTS]
                               [--spec SPEC]
                               run_id
@@ -454,7 +462,7 @@ positional arguments:
 options:
   -h, --help              show this help message and exit
   --node NODE             unfinished stage to retry with a different worker
-  --agent {auto,claude,codex,agy,grok}
+  --agent {auto,claude,codex,agy,grok,opencode}
   --route ROUTE           configured route to use for the selected stage
   --max-attempts MAX_ATTEMPTS
                           new explicit attempt limit per stage
@@ -657,7 +665,8 @@ local Laya setup, decisions and reviewed learning
 
 ```text
 usage: fusion decisions [-h]
-                        {setup,status,list,show,probe,label,suggest,eval-drafter,export,routing-report,calibrate,train,evaluate} ...
+                        {setup,status,list,show,probe,label,suggest,eval-drafter,export,routing-report,calibrate,train,evaluate}
+                        ...
 
 positional arguments:
   {setup,status,list,show,probe,label,suggest,eval-drafter,export,routing-report,calibrate,train,evaluate}
@@ -767,8 +776,7 @@ options:
 draft evidence-backed labels, with optional unanimous council approval
 
 ```text
-usage: fusion decisions suggest [-h] [--agent {auto,codex,claude,agy,grok}]
-                                [--council {codex,claude,agy,grok} [{codex,claude,agy,grok} ...]]
+usage: fusion decisions suggest [-h] [--agent AGENT] [--council COUNCIL [COUNCIL ...]]
                                 [--approval {human,council}]
                                 [--council-rule {unanimous,available}]
                                 [--garden-policy GARDEN_POLICY]
@@ -779,9 +787,11 @@ positional arguments:
 
 options:
   -h, --help              show this help message and exit
-  --agent {auto,codex,claude,agy,grok}
-  --council {codex,claude,agy,grok} [{codex,claude,agy,grok} ...]
-                          independent workers; unanimous answers become a draft
+  --agent AGENT           auto, a worker (codex, claude, agy, grok, opencode) or a
+                          configured route
+  --council COUNCIL [COUNCIL ...]
+                          independent workers or configured routes; unanimous answers
+                          become a draft
   --approval {human,council}
                           opt in to automatic approval of unanimous council answers
   --council-rule {unanimous,available}
@@ -797,12 +807,13 @@ options:
 evaluate drafts against human reviews in a temporary decision-store copy
 
 ```text
-usage: fusion decisions eval-drafter [-h] [--agent {auto,codex,claude,agy,grok}]
+usage: fusion decisions eval-drafter [-h]
+                                     [--agent {auto,codex,claude,agy,grok,opencode}]
                                      [--rebuild-input] [--limit LIMIT] [--json]
 
 options:
   -h, --help              show this help message and exit
-  --agent {auto,codex,claude,agy,grok}
+  --agent {auto,codex,claude,agy,grok,opencode}
   --rebuild-input         rebuild acceptance inputs from saved run artifacts
   --limit LIMIT           maximum reviewed decisions to evaluate
   --json                  print machine-readable results instead of a summary table

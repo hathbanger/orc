@@ -25,8 +25,13 @@ class ProgressTest(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.workspace = Path(directory.name)
-        self.env = {**os.environ, "FUSION_DECISIONS_MODE": "off", "FUSION_TELEMETRY": "0"}
+        # A private ORC_HOME keeps the developer's global fusion.json (routes,
+        # a different sidekick) out of the subprocesses these tests start.
+        (self.workspace / ".orc-home").mkdir()
+        self.env = {**os.environ, "FUSION_DECISIONS_MODE": "off", "FUSION_TELEMETRY": "0",
+                    "ORC_HOME": str(self.workspace / ".orc-home")}
         self.env.pop("FUSION_PROGRESS", None)
+        self.env.pop("FUSION_CONFIG", None)
 
     def fake_worker(self, body):
         worker = self.workspace / "codex-fixture"

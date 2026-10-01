@@ -69,6 +69,29 @@ requires `write: false`. Child traces and child cost are not qualified by this
 integration. The capability is authorization, not proof that no children exist
 when false.
 
+## OpenCode
+
+OpenCode workers pass `reasoning_effort` as `--variant` to `opencode run`
+without consulting the Codex local capability cache. The value is forwarded
+to OpenCode and the upstream provider validates it at request time.
+
+Accepted values for OpenCode lanes: `none`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, `max`. `ultra` is Codex-only and refused.
+
+```sh
+fusion delegate --agent opencode --route oc-sonnet --read-only \
+  --model anthropic/claude-opus-5-5 --reasoning-effort high \
+  "Review the persistence boundaries."
+```
+
+`execution_choice.catalog` is `unchecked` for OpenCode workers: the harness
+records the requested variant but cannot observe what the provider applied.
+`observed` stays `unobserved` in the run result.
+
+Laya model/effort advice works for OpenCode lanes the same way it does for
+`agy`: entries in `decisions.model_effort_pairs` with `"agent": "opencode"`
+are offered as candidates for tasks pinned to an OpenCode worker.
+
 ## Laya advice using the existing router
 
 ```json

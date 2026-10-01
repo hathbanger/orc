@@ -34,14 +34,15 @@ def save(app, workspace, body):
     from fusion_ui import atomic_json
     if type(body.get('enabled')) is not bool:
         raise ValueError('Choose whether automatic drafting is enabled')
-    from fusion_labeling import labeling_options, approval_options, council_rule
+    from fusion_labeling import labeling_options, approval_options, council_rule, member_lane, _local_config
     agent = body.get('agent', 'auto')
-    if agent not in {'auto', 'codex', 'claude', 'agy', 'grok'}:
-        raise ValueError('Choose an installed labeling worker')
+    config = _local_config(workspace)
+    if agent != 'auto':
+        member_lane(config, agent)
     with app.lock, locked(workspace):
         old = settings(workspace)
         options = labeling_options(body.get('labeling_mode', old['labeling_mode']),
-                                   body.get('council_agents', old['council_agents']))
+                                   body.get('council_agents', old['council_agents']), config)
         approval = approval_options(body.get('approval_mode', old['approval_mode']), options['labeling_mode'])
         rule = council_rule(body.get('council_rule', old['council_rule']))
         since = old['since_ms'] if old.get('configured') else int(time.time() * 1000)

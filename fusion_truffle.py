@@ -16,7 +16,7 @@ import fusion_progress as progress
 from fusion_workflow import effective_status
 from fusion_publish import options, read, repo_for, save, text
 
-WORKERS = {"auto", "codex", "claude", "agy", "grok"}
+WORKERS = {"auto", "codex", "claude", "agy", "grok", "opencode"}
 
 
 def root_for(workspace, scout_id):

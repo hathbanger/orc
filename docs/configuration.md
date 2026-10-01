@@ -263,7 +263,80 @@ above is honored. Explicit `execution_mode: "yolo"`
 uses the bypass flags described above. `agy` has no per-call budget flag, so cap its
 cost with `timeout_seconds` and the workflow's `budget_usd`. OpenRouter models
 are not in the `agy` host list — route those through the `orc` path instead.
-`agy` is not (yet) a lead candidate; `fusion lead` remains Claude or Codex.
+`agy` is not (yet) a lead candidate; `fusion lead` accepts Claude, Codex or OpenCode.
+
+## OpenCode settings
+
+[OpenCode](https://opencode.ai) (`opencode run --format json`) is a fifth worker
+harness. Any provider OpenCode is configured for works through
+`model: "provider/model"`. Provider keys, base URLs and the model list belong
+to OpenCode's own config (`~/.config/opencode/opencode.json`) and your local
+`$ORC_HOME/fusion.json`, never to a repository. If your provider needs a
+short-lived token or a custom CA bundle exported first, point `command` at a
+small local wrapper that sets those variables and `exec`s `opencode "$@"`;
+workers run headless, so the wrapper must not prompt.
+
+```json
+{
+  "opencode": {
+    "command": "opencode",
+    "model": "anthropic/claude-sonnet-4-6",
+    "agent": "",
+    "disable_mcp": [],
+    "bash_allow": [],
+    "permission": {},
+    "config": {}
+  }
+}
+```
+
+`command` is the binary (default `opencode`). `model` must include the provider
+prefix (`provider/model`, e.g. `anthropic/claude-sonnet-4-6`). An explicit model
+is required for automatic routing — OpenCode's configured default could be any
+provider. `agent` sets `--agent`; leave empty for the default.
+`disable_mcp` is a list of MCP server names to disable for this worker (sets
+`enabled: false` in `OPENCODE_CONFIG_CONTENT`). `bash_allow` is a list of
+additional Bash patterns to permit in restricted write-mode workers.
+`permission` is an object of extra OpenCode permission rules merged over Fusion's
+base policy (last-matching-rule-wins). `config` is merged into
+`OPENCODE_CONFIG_CONTENT`.
+
+`reasoning_effort` passes `--variant` to `opencode run` and is validated
+by OpenCode and the upstream provider at request time — the Codex local catalog
+is not consulted. Accepted values are `none`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, `max` (not `ultra`, which is Codex-only). See
+[OpenCode and --variant](model-effort.md#opencode).
+
+Permissions are set through `OPENCODE_PERMISSION`, which OpenCode deep-merges
+over the user's own `opencode.json(c)`. Read-only workers get a deny-by-default
+policy with read tools and read-only Git commands allowed, plus trailing denies
+for shell redirection, `tee`, `sed -i`, `find -delete`/`-exec` and `git push`; writers additionally get `edit` and an
+allowlist-only Bash policy. Nothing is left at `ask`: a headless run
+auto-rejects asks and ends the turn, while an explicit `deny` is returned to
+the model which can work around it. Route-level `permission` overrides can
+customize the policy, but core read-only denies (`edit: deny`,
+`external_directory: deny`) and `git push*` are always re-applied last.
+
+### One route per provider
+
+Routes let automatic routing compare providers. Give each provider its own
+`account` so a rate limit on one cools only that provider's lanes:
+
+```json
+{
+  "routes": {
+    "oc-sonnet": {"agent": "opencode", "model": "anthropic/claude-sonnet-4-6", "account": "oc/anthropic", "cost_tier": 2},
+    "oc-gpt":    {"agent": "opencode", "model": "openai/gpt-5.5",              "account": "oc/openai",    "cost_tier": 2},
+    "oc-gemini": {"agent": "opencode", "model": "google/gemini-2.5-pro",       "account": "oc/google",    "cost_tier": 1},
+    "oc-grok":   {"agent": "opencode", "model": "xai/grok-4",                  "account": "oc/xai",       "cost_tier": 1}
+  }
+}
+```
+
+Use model ids from `opencode models`; the example ids are illustrative. Use
+`fusion doctor` to check each route's command and
+`fusion delegate --agent opencode --route oc-sonnet --read-only "Check the diff"`
+to try a route before adding it to `decisions.auto_routes`.
 
 ## Older Grok clients
 

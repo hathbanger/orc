@@ -372,7 +372,7 @@ class ControlRoom:
                 "qualified_buckets": sum(bool(b.get("qualified")) for b in calibration.get("buckets", {}).values()),
                 "environment": {key: os.environ[key] for key in ("FUSION_DECISIONS_MODE", "FUSION_TELEMETRY", "FUSION_CONFIG") if key in os.environ},
                 "workers": [core.worker_availability(value, name)
-                            for name in ("codex", "claude", "agy", "grok")]}
+                            for name in ("codex", "claude", "agy", "grok", "opencode")]}
 
     def save_config(self, workspace, body):
         filename = ".orc.json" if body.get("target") == "orc" else ".fusion.json"
@@ -392,7 +392,7 @@ class ControlRoom:
                 config_for(merged)
                 if not isinstance(merged.get("routes"), dict):
                     raise ValueError("routes must be a JSON object")
-                for name in ("codex", "claude", "agy", "grok", "telemetry", "decisions"):
+                for name in ("codex", "claude", "agy", "grok", "opencode", "telemetry", "decisions"):
                     if not isinstance(merged.get(name), dict):
                         raise ValueError(f"{name} must be a JSON object")
             atomic_json(path, value)
@@ -670,7 +670,7 @@ class ControlRoom:
             argv += ["workflow", "publish", run_id, "--request", str(directory / "publication-request.json")]
         elif action == "delegate":
             agent = body.get("agent", "auto")
-            if agent not in {"auto", "codex", "claude", "agy", "grok"} or not text.strip():
+            if agent not in {"auto", "codex", "claude", "agy", "grok", "opencode"} or not text.strip():
                 raise ValueError("Choose a worker and describe its task")
             role = body.get("role", "review")
             if role not in {"review", "discovery", "planning", "implementation"}:
@@ -712,12 +712,13 @@ class ControlRoom:
                 raise ValueError("Choose a classifier and provide input")
             argv += ["decisions", "probe", "--kind", kind, "--", text]
         elif action == "suggest-labels":
-            from fusion_labeling import labelable, labeling_options, approval_options, council_rule
+            from fusion_labeling import labelable, labeling_options, approval_options, council_rule, member_lane, _local_config
             labelable(DecisionStore(workspace), body.get("decision_id"))
             agent = body.get("agent", "auto")
-            if agent not in {"auto", "codex", "claude", "agy", "grok"}:
-                raise ValueError("Choose a labeling worker")
-            options = labeling_options(body.get("labeling_mode", "single"), body.get("council_agents"))
+            local = _local_config(workspace)
+            if agent != "auto":
+                member_lane(local, agent)
+            options = labeling_options(body.get("labeling_mode", "single"), body.get("council_agents"), local)
             approval = approval_options(body.get("approval_mode", "human"), options['labeling_mode'])
             argv += ["decisions", "suggest", "--agent", agent, "--approval", approval,
                      "--council-rule", council_rule(body.get("council_rule", "unanimous"))]

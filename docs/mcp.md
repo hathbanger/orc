@@ -140,7 +140,8 @@ Delegate a bounded task to the other coding agent and receive a structured hando
         "codex",
         "claude",
         "agy",
-        "grok"
+        "grok",
+        "opencode"
       ],
       "type": "string"
     },

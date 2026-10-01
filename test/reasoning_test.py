@@ -88,9 +88,9 @@ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":12,"output_tok
             core.agent_command(self.config, self.task({"model": "", "reasoning_effort": "high"}), None)
         task = self.task(ASTRA)
         task["agent"] = "grok"
-        with self.assertRaisesRegex(ValueError, "native Codex, Claude Code and agy"):
+        with self.assertRaisesRegex(ValueError, "native Codex, Claude Code, agy and OpenCode"):
             core.agent_command(self.config, task, None)
-        with self.assertRaisesRegex(ValueError, "explicit Codex, Claude or agy"):
+        with self.assertRaisesRegex(ValueError, "explicit Codex, Claude, agy or OpenCode"):
             validate_spec({"nodes": [{"id": "one", "task": "inspect", "agent": "auto", **ASTRA}]})
 
     def test_claude_effort_is_passed_and_recorded_but_not_claimed(self):
@@ -208,6 +208,35 @@ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":12,"output_tok
         argv, _, metadata = core.agent_command(config, task, None)
         self.assertEqual(argv[argv.index("--effort") + 1], "medium")
         self.assertEqual(metadata["execution_choice"]["observed"]["status"], "unobserved")
+
+    def test_opencode_effort_does_not_read_codex_native_catalog(self):
+        """OpenCode --variant is validated by the provider; Codex models_cache.json must not be consulted."""
+        import fusion_policy
+        # An opencode lane with a gateway model id (not in the Codex catalog)
+        # and a valid OPENCODE_EFFORT must be a routing candidate.
+        opencode_worker = self.root / "opencode-fixture"
+        opencode_worker.write_text(f"#!{sys.executable}\npass\n")
+        opencode_worker.chmod(0o700)
+        config = core.deep_merge(self.config, {
+            "routes": {"oc-gateway": {"agent": "opencode", "command": str(opencode_worker),
+                                   "model": "anthropic/claude-opus-5-5", "reasoning_effort": "high"}},
+            "decisions": {"mode": "off"},
+        })
+        task = core.make_task(self.workspace, "auto", "fixture", "review", [], [], None, False, False)
+        rejected = {}
+        with patch.object(core, "executable", return_value=str(opencode_worker)):
+            candidates = fusion_policy.route_candidates(config, task, core.RunStore(self.workspace), rejected=rejected)
+        keys = {c["key"] for c in candidates}
+        self.assertIn("oc-gateway", keys, f"oc-gateway was rejected: {rejected.get('oc-gateway')}")
+        # ultra must still be rejected for opencode (it is a Codex-only effort level).
+        config2 = core.deep_merge(config, {"routes": {"oc-ultra": {"agent": "opencode",
+                                                                     "command": str(opencode_worker),
+                                                                     "model": "anthropic/claude-opus-5-5",
+                                                                     "reasoning_effort": "ultra"}}})
+        rejected2 = {}
+        with patch.object(core, "executable", return_value=str(opencode_worker)):
+            fusion_policy.route_candidates(config2, task, core.RunStore(self.workspace), rejected=rejected2)
+        self.assertIn("oc-ultra", rejected2)
 
     def test_named_route_keeps_model_and_effort_together(self):
         config = core.deep_merge(self.config, {"decisions": {"mode": "active"}, "routes": {

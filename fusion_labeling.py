@@ -94,7 +94,23 @@ def teacher_questions(questions):
     return result
 
 
-WORKERS = {"codex", "claude", "agy", "grok"}
+WORKERS = {"codex", "claude", "agy", "grok", "opencode"}
+
+
+def member_lane(config, member):
+    """A labeling member is a native worker or a named route, so a council can
+    seat several models of one harness (e.g. OpenCode routes per provider)."""
+    if member in WORKERS:
+        return member, None
+    route = ((config or {}).get("routes") or {}).get(member) if isinstance(member, str) else None
+    if isinstance(route, dict) and route.get("agent") in WORKERS:
+        return route["agent"], member
+    raise ValueError("Council members must be named local workers or configured routes")
+
+
+def _local_config(workspace):
+    import fusion_core as core
+    return core.load_config(Path(workspace))[0]
 
 
 def council_rule(value="unanimous"):
@@ -109,10 +125,12 @@ def unavailable(member):
         "quota", "timeout", "missing_executable", "permission_denied"}
 
 
-def recent_quota(workspace, config, agent):
+def recent_quota(workspace, config, member):
     """Reuse the native account cooldown; a successful newer call clears it."""
     import fusion_core as core
-    command = core.agent_settings(config, {"agent": agent}).get("command", agent)
+    agent, route = member_lane(config, member)
+    own = core.agent_settings(config, {"agent": agent, "route": route})
+    command = own.get("command", agent)
     if Path(str(command)).name == "orc":
         return None  # Named profiles may use different accounts.
     for span in core.RunStore(workspace).traces(limit=200):
@@ -121,25 +139,27 @@ def recent_quota(workspace, config, agent):
         if span.get("route") and span["route"] not in config.get("routes", {}):
             continue
         settings = core.agent_settings(config, {"agent": agent, "route": span.get("route")})
-        if settings.get("command", agent) != command:
+        if settings.get("command", agent) != command or core.lane_key(agent, settings) != core.lane_key(agent, own):
             continue
         if span.get("failure_class") == "quota" and 0 <= core.now_ms() - span.get("end_time_ms", 0) < core.LANE_COOLDOWN_SECONDS * 1000:
-            return {"requested_agent": agent, "agent": agent, "status": "unavailable", "failure_class": "quota",
+            return {"requested_agent": member, "agent": agent, "status": "unavailable", "failure_class": "quota",
                     "error": "Recent call reached this account's quota; skipping during its 15-minute cooldown.",
                     "prior_run_id": span.get("task_id")}
         break
     return None
 
 
-def labeling_options(mode="single", members=None):
+def labeling_options(mode="single", members=None, config=None):
     if mode not in {"single", "council"}:
         raise ValueError("Choose single-worker or council labeling")
     members = [] if members is None else members
-    if not isinstance(members, list) or any(not isinstance(a, str) or a not in WORKERS for a in members):
-        raise ValueError("Council members must be named local workers")
+    if not isinstance(members, list) or any(not isinstance(a, str) for a in members):
+        raise ValueError("Council members must be named local workers or configured routes")
+    for member in members:
+        member_lane(config, member)
     if len(set(members)) != len(members):
         raise ValueError("Choose different workers for the council")
-    if mode == "council" and not 2 <= len(members) <= len(WORKERS):
+    if mode == "council" and not 2 <= len(members) <= max(len(WORKERS), 8):
         raise ValueError("Choose at least two different workers for the council")
     return {"labeling_mode": mode, "council_agents": members}
 
@@ -188,9 +208,11 @@ In addition to the required handoff, return exactly one fenced block in this for
 Each question must appear in exactly one of answers or abstentions. All-abstention is valid.
 BLOCKERS: none when your assessment is complete, including when evidence is insufficient.
 """ + "\nDecision kind: " + record["kind"] + "\nQuestions:\n" + core.json_text(teacher_questions(record["questions"])) + "\nEvidence packet:\n" + core.json_text(sources)
+    requested = agent
+    agent, route = ("auto", None) if agent == "auto" else member_lane(config, agent)
     task = core.make_task(Path(workspace), agent, prompt, "labeling", [],
                           ["Assess the supplied evidence only; do not edit or delegate."],
-                          "label-suggestion:" + uuid.uuid4().hex, False, False)
+                          "label-suggestion:" + uuid.uuid4().hex, False, False, route=route)
     if on_started:
         on_started(task["run_id"])
     # Labeling must not recursively invoke the classifier being trained.
@@ -205,7 +227,7 @@ BLOCKERS: none when your assessment is complete, including when evidence is insu
         else:
             os.environ["FUSION_DECISIONS_MODE"] = previous_mode
     metadata = {k: result.get(k) for k in ("agent", "model", "run_id", "usage")}
-    metadata["requested_agent"] = agent
+    metadata["requested_agent"] = requested
     if result.get("status") != "success" or result.get("exit_code") != 0:
         return {**metadata, "status": "error", "failure_class": core.failure_class(result),
                 "error": "Label worker failed: " + str(result.get("blockers") or result.get("summary"))}
@@ -244,9 +266,9 @@ def suggest(workspace, config, decision_id, agent="auto", labeling_mode="single"
             approval_mode="human", garden_policy=None, rule="unanimous"):
     import sys
     from fusion_publish import save
-    if agent not in WORKERS | {"auto"}:
-        raise ValueError("Choose an installed labeling worker")
-    options = labeling_options(labeling_mode, council_agents)
+    if agent != "auto":
+        member_lane(config, agent)
+    options = labeling_options(labeling_mode, council_agents, config)
     approval_options(approval_mode, labeling_mode)
     council_rule(rule)
     store = DecisionStore(workspace)
@@ -357,7 +379,7 @@ def approve_council(workspace, decision_id, suggestion_id, garden_policy=None):
         suggestion = suggestions[-1]
         approval_provenance(store, record, suggestion_id, {})  # Reject changed decision inputs.
         members = suggestion.get('council', {}).get('members', [])
-        labeling_options('council', [m.get('requested_agent') for m in members])
+        labeling_options('council', [m.get('requested_agent') for m in members], _local_config(workspace))
         for member in members:
             if member.get('status') == 'success':
                 parse_suggestion('```label-suggestion\n' + json.dumps({k: member[k] for k in ('answers', 'abstentions')}) + '\n```', record, suggestion['sources'])
