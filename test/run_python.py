@@ -1,5 +1,6 @@
 """Keep unexpected coverage gaps fatal, with one explicit local-runtime exception."""
 from pathlib import Path
+import os
 import shutil
 import sys
 import unittest
@@ -28,6 +29,7 @@ def check_result(result, stream=sys.stderr):
 
 
 if __name__ == '__main__':
+    os.environ['FUSION_LAYA_PYTHON'] = shutil.which('false') or '/usr/bin/false'
     suite = unittest.defaultTestLoader.discover(str(Path(__file__).parent), pattern='*_test.py')
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     raise SystemExit(0 if check_result(result) else 1)

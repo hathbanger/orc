@@ -577,6 +577,10 @@ def runtime_for(options):
     key = digest(options)
     with _runtime_lock:
         if key not in _runtimes:
+            for stale in _runtimes.values():
+                with stale.lock:
+                    stale.close()
+            _runtimes.clear()
             _runtimes[key] = LayaRuntime(options)
         return _runtimes[key]
 
