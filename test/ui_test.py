@@ -308,7 +308,7 @@ class ControlRoomTest(unittest.TestCase):
         job = self.wait_job(json.loads(response)["id"])
         self.assertEqual(job["status"], "success", job)
         self.assertEqual(job["decision_id"], "label-test")
-        self.assertEqual(store.export(self.root / "before.jsonl")["examples"], 0)
+        self.assertEqual(store.export(self.root / "before.jsonl", include_unknown=True)["examples"], 0)
         events = read_jsonl(store.path)
         draft = next(e for e in events if e["event"] == "label_suggestion")
         self.assertFalse(draft["verified"])
@@ -320,7 +320,7 @@ class ControlRoomTest(unittest.TestCase):
         body = {"id": "label-test", "answers": {"plausible": "true"}, "evidence": "Human corrected the answer after checking the fixture.", "suggestion_id": draft["suggestion_id"]}
         self.assertEqual(self.request("/api/label", body)[0], 400)
         self.assertEqual(self.request("/api/label", {**body, "approved": True})[0], 200)
-        self.assertEqual(store.export(self.root / "after.jsonl")["examples"], 1)
+        self.assertEqual(store.export(self.root / "after.jsonl", include_unknown=True)["examples"], 1)
         label = read_jsonl(store.path)[-1]
         self.assertTrue(label["answers_edited"])
         self.assertEqual(label["suggested_by"]["run_id"], draft["run_id"])
@@ -342,7 +342,7 @@ class ControlRoomTest(unittest.TestCase):
             other_app.launch(self.workspace, {"action": "suggest-labels", "decision_id": "label-test"})
         self.assertEqual(self.request("/api/cancel", {"id": job["id"]})[0], 200)
         self.assertEqual(self.wait_job(job["id"])["status"], "cancelled")
-        self.assertEqual(store.export(self.root / "cancelled.jsonl")["examples"], 0)
+        self.assertEqual(store.export(self.root / "cancelled.jsonl", include_unknown=True)["examples"], 0)
 
     def test_garden_runs_without_browser_polling_and_requires_human_approval(self):
         from fusion_decisions import read_jsonl
@@ -357,7 +357,7 @@ class ControlRoomTest(unittest.TestCase):
         job = self.wait_job(self.app.jobs(self.workspace)[0]['id'])
         self.assertEqual(job['status'], 'success', job)
         self.assertTrue(job['garden'])
-        self.assertEqual(store.export(self.root / 'draft-only.jsonl')['examples'], 0)
+        self.assertEqual(store.export(self.root / 'draft-only.jsonl', include_unknown=True)['examples'], 0)
         _, response, _ = self.request('/api/decisions')
         view = json.loads(response)
         self.assertEqual(view['learning']['counts']['needs_review'], 1)
@@ -365,9 +365,9 @@ class ControlRoomTest(unittest.TestCase):
         draft = next(e for e in read_jsonl(store.path) if e.get('event') == 'label_suggestion')
         self.request('/api/label', {'id': 'label-test', 'answers': {'plausible': 'false'}, 'evidence': 'Checked original task', 'suggestion_id': draft['suggestion_id'], 'approved': True})
         self.assertEqual(self.request('/api/label-exclusion', {'id': 'label-test', 'excluded': True})[0], 200)
-        self.assertEqual(store.export(self.root / 'excluded.jsonl')['examples'], 0)
+        self.assertEqual(store.export(self.root / 'excluded.jsonl', include_unknown=True)['examples'], 0)
         self.assertEqual(self.request('/api/label-exclusion', {'id': 'label-test', 'excluded': False})[0], 200)
-        self.assertEqual(store.export(self.root / 'restored.jsonl')['examples'], 1)
+        self.assertEqual(store.export(self.root / 'restored.jsonl', include_unknown=True)['examples'], 1)
         self.assertEqual(self.request('/api/garden', {'enabled': False})[0], 200)
 
 

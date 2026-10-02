@@ -149,7 +149,9 @@ The configured checkpoint is shown separately from candidate models.
 ## Quality and automatic training
 
 Approval feeds automatic training when enabled; manual export, training, and evaluation
-remain available. Choose a checkpoint in project settings after evaluation. Candidate cards
+remain available. Exports and automatic training drop rows from repos in
+`export.exclude_repos` and rows whose source repo is unknown; see
+[exports and excluded repos](configuration.md#exports-and-excluded-repos). Choose a checkpoint in project settings after evaluation. Candidate cards
 show held-out accuracy and the shuffled-state control; improvement is reported
 only when the source model was evaluated on the same held-out benchmark. Historical
 prediction/label agreement is explicitly separate from held-out evaluation.
@@ -286,7 +288,9 @@ mode). `gym run` calls paid models. See
 
 
 Export gym evidence with `fusion gym priors GYM_DIR`; see
-[routing priors](routing.md#gym-lane-priors) for defaults and disabling.
+[routing priors](routing.md#gym-lane-priors) for defaults and disabling. Tasks
+from excluded or unknown repos are left out by default; see
+[exports and excluded repos](configuration.md#exports-and-excluded-repos).
 
 
 Use `interpret` to measure read-only triage against factual evidence. Seed it

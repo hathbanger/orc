@@ -4,7 +4,7 @@ No agent calls or model promotion. Every comparison keeps its exact benchmark an
 model identities. New evidence, not a timer alone, triggers another round.
 """
 from __future__ import annotations
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 from pathlib import Path
 import uuid
@@ -67,13 +67,27 @@ def split_method(workspace):
         return DEFAULT_SPLIT
 
 
-def curate(source, destination):
+def repo_exclusions(workspace, config, rows):
+    """{row id: reason} for rows whose run came from an excluded or unknown repo (core.excluded_repo)."""
+    from fusion_decisions import DecisionStore
+    runs = {r.get('id'): (r.get('context') or {}).get('task_id') for r in DecisionStore(workspace).records()}
+    repos = {task: core.run_repo(workspace, task) for task in {runs.get(row['id']) for row in rows}}
+    return {row['id']: reason for row in rows if (reason := core.excluded_repo(config, repos[runs.get(row['id'])]))}
+
+
+def curate(source, destination, workspace=None, config=None):
     """Never move held-out examples into training. Keep one copy of an input,
     favoring its existing validation copy. Conflicting inputs are withheld whole.
     Original exports, labels, workflow groups and review provenance remain intact.
+    With a workspace, rows from an excluded or unknown repo are withheld and
+    counted by reason, whatever the export was run with.
     """
     from fusion_laya import dataset_rows
     rows = dataset_rows(source)
+    withheld = repo_exclusions(workspace, config, rows) if workspace is not None else {}
+    excluded_repos = dict(sorted(Counter(withheld.values()).items()))
+    rows_in = len(rows)
+    rows = [row for row in rows if row['id'] not in withheld]
     buckets = defaultdict(list)
     for row in rows:
         buckets[input_key(row)].append(row)
@@ -98,7 +112,7 @@ def curate(source, destination):
     with destination.open('x') as out:
         for row in sorted(kept,key=lambda r:r['id']): out.write(json.dumps(row,ensure_ascii=False)+'\n')
     destination.chmod(0o600)
-    return {'original_examples':len(rows), 'retained_examples':len(kept), 'duplicate_ids':duplicates,
+    return {'original_examples':rows_in, 'retained_examples':len(kept), 'excluded_repos':excluded_repos, 'duplicate_ids':duplicates,
             'conflicting_ids':conflicts, 'data_quality':quality, 'path':str(destination)}
 
 
@@ -284,7 +298,7 @@ def tick(app, workspace):
                     destination=path.parent/'dataset.jsonl'
                     # A prior failed curation never leaves a partially accepted dataset.
                     if destination.exists(): destination.unlink()
-                    round['curation']=curate(raw,destination)
+                    round['curation']=curate(raw,destination,workspace,config)
                     round['dataset']=str(destination)
                 if phase=='train':
                     if result.get('source_identity') not in round['results']['baseline'].get('model_identities',[]):

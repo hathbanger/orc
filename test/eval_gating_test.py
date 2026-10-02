@@ -92,7 +92,7 @@ class TimeSplitTest(unittest.TestCase):
         self.decision("g0-late", "group-0", 10 ** 9)
         # An unlabeled newer group dates nothing and is not held out.
         self.decision("unlabeled", "group-new", 10 ** 9, labeled=False)
-        exported = self.store.export(self.workspace / "time.jsonl")
+        exported = self.store.export(self.workspace / "time.jsonl", include_unknown=True)
         rows = dataset_rows(self.workspace / "time.jsonl")
         self.assertEqual(exported["split_method"], "time")
         by_group = {}
@@ -104,7 +104,7 @@ class TimeSplitTest(unittest.TestCase):
         newest_train = max(r["group_first_ms"] for r in rows if r["split"] == "train")
         oldest_held = min(r["group_first_ms"] for r in rows if r["split"] == "validation")
         self.assertLess(newest_train, oldest_held)
-        hashed = self.store.export(self.workspace / "hash.jsonl", split="group-hash")
+        hashed = self.store.export(self.workspace / "hash.jsonl", split="group-hash", include_unknown=True)
         self.assertEqual(hashed["split_method"], "group-hash")
 
     def test_split_sizes_keep_both_sides(self):
@@ -292,7 +292,7 @@ class GatingTest(unittest.TestCase):
                     self.assertEqual(record["context"]["role"], "triage-interpret")
                     engine.store.label(record["id"], {"action": "repair"}, "Reviewed")
             exported = self.workspace / "export.jsonl"
-            engine.store.export(exported)
+            engine.store.export(exported, include_unknown=True)
             self.assertEqual(dataset_rows(exported)[0]["role"], "triage-interpret")
             # allowed re-reads the current role calibration, just as for legacy buckets.
             report["buckets"][f"{base}:triage-interpret:action"]["temperature"] = 1

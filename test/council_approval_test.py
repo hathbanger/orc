@@ -67,7 +67,7 @@ class CouncilApprovalTest(unittest.TestCase):
         self.assertEqual(event['approval_rule'], 'unanimous')
         self.assertEqual([m['agent'] for m in event['reviewers']], ['codex','claude'])
         path = self.workspace / 'training.jsonl'
-        exported = self.store.export(path)
+        exported = self.store.export(path, include_unknown=True)
         row = json.loads(path.read_text())
         self.assertEqual(row['labels'], {'specialty':'payments','needs_review':'true'})
         self.assertEqual(row['label_provenance']['specialty']['source'], 'council_approved_suggestion')
@@ -127,7 +127,7 @@ class CouncilApprovalTest(unittest.TestCase):
         self.assertEqual([m['agent'] for m in event['reviewers']], ['codex','agy','grok'])
         self.assertEqual(self.app.label_runs(self.workspace)[0]['members'][1]['status'], 'unavailable')
         path = self.workspace / 'available.jsonl'
-        self.store.export(path)
+        self.store.export(path, include_unknown=True)
         provenance = json.loads(path.read_text())['label_provenance']['specialty']
         self.assertEqual(provenance['approval_rule'], 'available')
         self.assertEqual(provenance['unavailable_members'][0]['failure_class'], 'quota')
