@@ -703,15 +703,19 @@ class DecisionStore:
             provenance = approval_provenance(self, record, suggestion_id, answers)
         self.append("label", id=decision_id, answers=answers, evidence=evidence, verified=True, replace=replace, **provenance)
 
-    def export(self, destination, exclude_sources=(), split="time"):
+    def export(self, destination, exclude_sources=(), split="time", config=None, include_repos=(), include_unknown=False):
         """Labeled examples as fusion.training.v1 rows, split by workflow group
         (assign_splits). Each row carries the deterministic policy's answers
-        (`heuristic`) so evaluation can report that baseline."""
+        (`heuristic`) so evaluation can report that baseline. A row whose run
+        (context.task_id) came from an excluded or unknown repo is dropped
+        (fusion_core.excluded_repo) and counted by reason in `excluded_repos`."""
+        from fusion_core import excluded_repo, run_repo
         events = read_jsonl(self.path)
         labels, exclusions = reviewed_labels(events)
         provenance = label_provenance(events)
         excluded_sources = set(exclude_sources)
-        rows, over_budget = [], 0
+        rows, over_budget, by_repo, repos = [], 0, Counter(), {}
+        workspace = self.root.parent.parent
         records = {e["id"]: e for e in events if e.get("event") == "decision"}
         applications = {e.get("id"): e for e in events if e.get("event") == "application"}
         first_seen = group_first_seen(records.values())
@@ -722,6 +726,12 @@ class DecisionStore:
             if kept and not exclusions.get(record["id"]) and not record.get("truncated") and exceeds_token_budget(record):
                 over_budget += 1
             if not kept or exclusions.get(record["id"]) or not labelable_record(record):
+                continue
+            task_id = (record.get("context") or {}).get("task_id")
+            if task_id not in repos:
+                repos[task_id] = run_repo(workspace, task_id)
+            if reason := excluded_repo(config, repos[task_id], include_repos, include_unknown):
+                by_repo[reason] += 1
                 continue
             group = record_group(record)
             rows.append({"schema": "fusion.training.v1", "id": record["id"], "group": group,
@@ -743,7 +753,7 @@ class DecisionStore:
         from fusion_quality import dataset_quality
         return {"examples": len(rows), "splits": dict(Counter(row["split"] for row in rows)), "split_method": split,
                 "path": str(destination),
-                "skipped_over_token_budget": over_budget,
+                "skipped_over_token_budget": over_budget, "excluded_repos": dict(sorted(by_repo.items())),
                 "data_quality": dataset_quality(rows), "dataset_hash": hashlib.sha256(destination.read_bytes()).hexdigest()}
 
 

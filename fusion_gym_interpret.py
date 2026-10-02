@@ -116,7 +116,7 @@ def build_interpret_task(source, seed=0, period=None, templates=None, split="all
     bundle["evidence/questions.json"] = json.dumps(questions, indent=2) + "\n"
     identity = digest(json.dumps({"bundle": bundle, "truth": truth, "seed": seed, "period": period}, sort_keys=True))[:16]
     return {"schema": TASK_SCHEMA, "kind": "interpret", "id": f"{source['id']}-interpret-{identity}",
-            "pr": source.get("pr"), "repo_path": source["repo_path"], "source_task": source["id"],
+            "pr": source.get("pr"), "repo": source.get("repo"), "repo_path": source["repo_path"], "source_task": source["id"],
             "seed": seed, "period": period, "split": split, "bundle": bundle, "interpretation": truth,
             "prompt": "Interpret the evidence bundle and answer its factual questions."}
 

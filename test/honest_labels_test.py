@@ -446,12 +446,12 @@ class HonestLabelsTest(unittest.TestCase):
         self.assertEqual(reviewed_labels(events)[0][gate_id], {"failed_task": "false"})
         self.assertEqual(label_provenance(events)[gate_id]["failed_task"]["source"], "structural_gate")
         # A human label is never overwritten by a gate, and export carries provenance.
-        exported = self.store.export(self.root / "all.jsonl")
+        exported = self.store.export(self.root / "all.jsonl", include_unknown=True)
         rows = [json.loads(line) for line in (self.root / "all.jsonl").read_text().splitlines()]
         row = next(r for r in rows if r["id"] == gate_id)
         self.assertEqual(row["label_provenance"]["failed_task"]["source"], "structural_gate")
         self.assertGreaterEqual(exported["examples"], 1)
-        self.store.export(self.root / "no-gate.jsonl", ["structural_gate"])
+        self.store.export(self.root / "no-gate.jsonl", ["structural_gate"], include_unknown=True)
         kept = [json.loads(line)["id"] for line in (self.root / "no-gate.jsonl").read_text().splitlines()]
         self.assertNotIn(gate_id, kept)
 

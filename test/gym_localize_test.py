@@ -195,8 +195,8 @@ class GroundTruthTest(Isolated):
         record = next(e for e in events if e.get("event") == "decision" and e["id"] == decision)
         self.assertEqual((record["kind"], record["context"]["task_id"]), ("acceptance", right["worker"]["run_id"]))
         self.assertFalse([e for e in events if e.get("event") == "label" and e.get("source") == "structural_gate"])
-        exported = DecisionStore(self.gym_dir).export(self.root / "all.jsonl")
-        without = DecisionStore(self.gym_dir).export(self.root / "no-grade.jsonl", ["gym_grade"])
+        exported = DecisionStore(self.gym_dir).export(self.root / "all.jsonl", include_unknown=True)
+        without = DecisionStore(self.gym_dir).export(self.root / "no-grade.jsonl", ["gym_grade"], include_unknown=True)
         self.assertEqual((exported["examples"], without["examples"]), (2, 0))
         # Resumable, and read-only lanes never leave a worktree behind.
         self.assertEqual(gym.run(self.tasks, ["right", "wrong"], self.gym_dir, kind="localize")["runs"], [])

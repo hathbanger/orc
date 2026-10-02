@@ -477,6 +477,17 @@ def ensure_localization(task):
     return task["localization"]
 
 
+def source_repo(repo):
+    """The `owner/name` a task was extracted from (its origin remote), or None."""
+    from fusion_core import repo_slug
+    return repo_slug(repo)
+
+
+def task_source_repo(task):
+    """A task's recorded repo, else its source checkout's, for tasks extracted before repos were recorded."""
+    return task.get("repo") or source_repo(task.get("repo_path"))
+
+
 def extract_one(repo, pr, ref="HEAD", gh_repo=None, use_gh=True, timeout=DEFAULT_TIMEOUT, p2p_limit=DEFAULT_P2P_LIMIT):
     """One task dict, or {"pr": N, "skipped": reason}."""
     repo = Path(repo).resolve()
@@ -545,7 +556,7 @@ def extract_one(repo, pr, ref="HEAD", gh_repo=None, use_gh=True, timeout=DEFAULT
     return {
         "schema": TASK_SCHEMA, "id": task_id, "pr": int(pr), "pr_url": info.get("url"),
         "issues": [issue.get("url") for issue in info.get("issues") or []],
-        "repo_path": str(repo), "base": base, "fix": fix, "task_ref": REF_PREFIX + task_id, "task_sha": task_sha,
+        "repo": source_repo(repo), "repo_path": str(repo), "base": base, "fix": fix, "task_ref": REF_PREFIX + task_id, "task_sha": task_sha,
         "prompt": prompt, "prompt_source": source, **({"gh_error": info["gh_error"]} if info.get("gh_error") else {}),
         "fail_to_pass": f2p, "pass_to_pass": sorted(test for _, ids in p2p_checks for test in ids),
         "checks": {"fail_to_pass": [argv for argv, _ in f2p_checks], "pass_to_pass": [argv for argv, _ in p2p_checks]},
@@ -569,7 +580,7 @@ def extract(repo, prs, out=None, ref="HEAD", gh_repo=None, use_gh=True, timeout=
             Path(out).mkdir(parents=True, exist_ok=True)
             (Path(out) / f"{task['id']}.json").write_text(json.dumps(task, indent=2, ensure_ascii=False) + "\n")
         rows.append(task)
-    summary = {"repo": str(Path(repo).resolve()), "ref": ref, "tasks": [
+    summary = {"repo": source_repo(repo), "repo_path": str(Path(repo).resolve()), "ref": ref, "tasks": [
         {"id": t["id"], "pr": t["pr"], "fail_to_pass": len(t["fail_to_pass"]), "pass_to_pass": len(t["pass_to_pass"]),
          "prompt_source": t["prompt_source"], "interface": len(t.get("interface") or [])}
         for t in rows if "schema" in t],
@@ -1009,6 +1020,7 @@ def run(tasks_path, lanes, gym, max_tasks=None, budget_usd=None, keep_worktrees=
             pending = [name for name in lanes if result_key(task["id"], name, task_mode, kind) not in done]
             if not pending:
                 continue
+            repo_of_task = task_source_repo(task)
             if localize and not gradeable(ensure_localization(task))[0]:
                 skipped.append({"task": task["id"], "reason": "the fix changed no source file that exists in B"})
                 continue
@@ -1034,6 +1046,7 @@ def run(tasks_path, lanes, gym, max_tasks=None, budget_usd=None, keep_worktrees=
                     from fusion_gym_interpret import run_lane
                     remaining = None if budget_usd is None else budget_usd - spent
                     row = run_lane(task, name, lane, gym, config, runner, workflow_id, remaining, keep_worktrees)
+                    row["repo"] = repo_of_task
                     _append(gym, row)
                     finished.append(row)
                     spent += row["cost_usd"]
@@ -1099,6 +1112,7 @@ def run(tasks_path, lanes, gym, max_tasks=None, budget_usd=None, keep_worktrees=
                     row["error"] = outcome["error"]
                 (evidence / f"{workflow_id}.patch").write_bytes(patch)
                 row["patch"] = str(evidence / f"{workflow_id}.patch")
+                row["repo"] = repo_of_task
                 _append(gym, row)
                 finished.append(row)
                 spent += row["cost_usd"]
@@ -1231,17 +1245,23 @@ def lane_prior_key(spec):
     return ":".join(part for part in (route or agent, model, effort) if part)
 
 
-def lane_priors(gym, now=None):
+def lane_priors(gym, now=None, config=None, include_repos=(), include_unknown=False):
     """Per lane and work class, from completed hidden-mode rows (latest per
     key): attempts, successes, mean cost and wall seconds. Rows on a task no
     lane solved (fix, per hidden mode) or localized are excluded, as the audit
     withholds their negatives: an underspecified task says nothing about a
-    lane. Both hidden modes count toward `write`, each audited on its own."""
+    lane. Both hidden modes count toward `write`, each audited on its own.
+    Rows from an excluded or unknown repo (fusion_core.excluded_repo) are
+    excluded first, by reason; `repos` lists the source repos counted."""
+    from fusion_core import excluded_repo
     latest = _latest_hidden(gym)
     solved = _solved(latest)
     generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now if now is not None else time.time()))
-    priors, excluded, unsolvable = {}, {}, {}
+    priors, excluded, unsolvable, repos = {}, {}, {}, set()
     for row in sorted(latest.values(), key=lambda r: r["key"]):
+        if reason := excluded_repo(config, row.get("repo"), include_repos, include_unknown):
+            excluded[reason] = excluded.get(reason, 0) + 1
+            continue
         kind, verdict = row["kind"], row.get("verdict")
         wins, losses = PRIOR_VERDICTS[kind]
         scope = row["mode"] if kind == "fix" else "localize"
@@ -1264,6 +1284,7 @@ def lane_priors(gym, now=None):
                                                           "reasoning_effort": effort, "gym_lanes": []})
         if row["lane"] not in entry["gym_lanes"]:
             entry["gym_lanes"].append(row["lane"])
+        repos.add(str(row.get("repo") or "unknown").lower())
         stats = entry.setdefault(WORK_CLASSES[kind], {"attempts": 0, "successes": 0, "_cost": 0.0, "_ms": 0})
         attempts, successes = 1, int(verdict in wins)
         if kind == "interpret":
@@ -1292,7 +1313,7 @@ def lane_priors(gym, now=None):
             "counted": {"write": "completed hidden and hidden+hints fix runs: solved vs unsolved/regressed",
                         "read": "completed localize runs: localized vs missed/invalid_answer",
                         "interpret": "train questions: correct accepted, misread/invalid rejected, abstain half rejection; holdout excluded"},
-            "excluded": dict(sorted(excluded.items())),
+            "excluded": dict(sorted(excluded.items())), "repos": sorted(repos),
             "unsolved_by_all": {scope: sorted(tasks) for scope, tasks in sorted(unsolvable.items())},
             "priors": dict(sorted(priors.items()))}
 
@@ -1316,6 +1337,7 @@ def priors_table(value):
                              f"{stats['successes'] / stats['attempts']:>5.2f} {stats['mean_cost_usd']:>7.4f} "
                              f"{stats['mean_seconds']:>7.1f}")
     lines.append("excluded: " + (", ".join(f"{k} {v}" for k, v in value["excluded"].items()) or "none"))
+    lines.append("repos counted: " + (", ".join(value.get("repos") or []) or "none"))
     lines += [f"unsolved by all ({scope}): {', '.join(tasks)}" for scope, tasks in value["unsolved_by_all"].items()]
     return "\n".join(lines)
 
@@ -1534,6 +1556,10 @@ def add_parser(sub):
     priors_cmd.add_argument("gym_dir")
     priors_cmd.add_argument("--out", help="where to write them (default: lane_priors.json under ORC_HOME, "
                                           "~/.config/orc; `-` prints only)")
+    priors_cmd.add_argument("--include-repo", action="append", default=[], metavar="SLUG",
+                            help="count tasks from this owner/name even though export.exclude_repos lists it; repeatable")
+    priors_cmd.add_argument("--include-unknown", action="store_true",
+                            help="count tasks whose source repo was not recorded (excluded by default)")
 
 
 def command(args, workspace, as_json=False, out=None):
@@ -1567,7 +1593,9 @@ def command(args, workspace, as_json=False, out=None):
               file=out)
         return 0
     if args.gym_command == "priors":
-        value = lane_priors(args.gym_dir)
+        import fusion_core as core
+        value = lane_priors(args.gym_dir, config=core.load_config(Path(workspace))[0],
+                            include_repos=args.include_repo, include_unknown=args.include_unknown)
         path = None if args.out == "-" else write_priors(value, args.out or default_priors_path())
         print(json.dumps(value, indent=2) if as_json else
               priors_table(value) + (f"\nwrote {path}" if path else ""), file=out)

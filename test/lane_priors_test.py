@@ -54,7 +54,7 @@ class ExportTest(Isolated):
             row("pr-2", "agy", AGY, "solved"),
             {**row("pr-2", "opus", OPUS, "solved"), "check_inputs_changed": ["grade.py"]},
         ])
-        value = gym.lane_priors(self.root)
+        value = gym.lane_priors(self.root, include_unknown=True)
         self.assertEqual(list(value["priors"]), ["agy"])
         self.assertEqual(value["priors"]["agy"]["write"]["attempts"], 1)
         self.assertEqual(value["unsolved_by_all"], {"hidden": ["pr-1"]})
@@ -84,7 +84,7 @@ class ExportTest(Isolated):
             row("pr-2", "cohere", COHERE, "invalid_answer", kind="localize"),
         ]
         write_rows(self.root, rows)
-        value = gym.lane_priors(self.root, now=0)
+        value = gym.lane_priors(self.root, now=0, include_unknown=True)
         self.assertEqual(value["schema"], gym.PRIORS_SCHEMA)
         self.assertEqual(value["generated_at"], "1970-01-01T00:00:00Z")
         priors = value["priors"]
@@ -110,7 +110,7 @@ class ExportTest(Isolated):
         parser = core.build_parser()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(core.main(["gym", "priors", str(self.root)]), 0)
+            self.assertEqual(core.main(["gym", "priors", str(self.root), "--include-unknown"]), 0)
         path = self.root / "orc-home" / "lane_priors.json"
         self.assertEqual(gym.default_priors_path(), path)
         self.assertEqual(json.loads(path.read_text())["priors"]["agy"]["write"]["successes"], 1)

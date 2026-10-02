@@ -61,10 +61,10 @@ class LearningTest(unittest.TestCase):
         self.assertEqual(sum(p['labels'] for p in summary['growth']), 1)
         self.store.append('label_exclusion', id='a', excluded=True)
         self.assertEqual(learning_summary(self.workspace, self.config)['labeled_questions'], 0)
-        self.assertEqual(self.store.export(self.workspace / 'excluded.jsonl')['examples'], 0)
+        self.assertEqual(self.store.export(self.workspace / 'excluded.jsonl', include_unknown=True)['examples'], 0)
         self.store.append('label_exclusion', id='a', excluded=False)
         target = self.workspace / 'restored.jsonl'
-        self.assertEqual(self.store.export(target)['examples'], 1)
+        self.assertEqual(self.store.export(target, include_unknown=True)['examples'], 1)
         self.assertEqual(json.loads(target.read_text())['labels'], {'plausible': 'true'})
 
     def test_independent_group_readiness_and_no_model_improvement_from_approval(self):
@@ -118,7 +118,7 @@ class LearningTest(unittest.TestCase):
             self.assertEqual(launch.call_count, 2)
             self.assertNotEqual(launch.call_args.args[1]['decision_id'], key)
             self.assertNotIn(launch.call_args.args[1]['decision_id'], ['approved', 'excluded'])
-        self.assertEqual(self.store.export(self.workspace / 'only-approved.jsonl')['examples'], 1)
+        self.assertEqual(self.store.export(self.workspace / 'only-approved.jsonl', include_unknown=True)['examples'], 1)
 
     def test_invalid_garden_configuration_cannot_enable_calls(self):
         for value in [{'enabled': 'yes'}, {'enabled': True, 'labeling_mode': 'council', 'council_agents': ['codex']}, {'enabled': True, 'labeling_mode': 'bad'}, {'enabled': True, 'agent': 'bad'}]:

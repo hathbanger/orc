@@ -263,7 +263,7 @@ class VerdictLabelsTest(unittest.TestCase):
         self.assertEqual((summary["reviewed_decisions"], summary["labeled_questions"]), (6, 9))
         self.assertEqual(len(tokens(rows)), 9)
         self.assertEqual(sum(readiness(rows).values()), 6)
-        exported = self.store.export(self.workspace / "all.jsonl")
+        exported = self.store.export(self.workspace / "all.jsonl", include_unknown=True)
         self.assertEqual((exported["examples"], exported["data_quality"]["approval_sources"]), (6, {"lead_verdict": 9}))
         row = json.loads((self.workspace / "all.jsonl").read_text().splitlines()[0])
         self.assertEqual((row["prediction"], row["model_identity"]), ({}, None))
@@ -282,7 +282,7 @@ class VerdictLabelsTest(unittest.TestCase):
                                ACCEPTANCE_QUESTIONS, {"task_id": "w", "group": "w"})
         self.store.label(scored["id"], {"plausible": "true"}, "Human verified the diff")
         self.verdict(self.run_dir(), True)
-        self.store.export(self.workspace / "mixed.jsonl")
+        self.store.export(self.workspace / "mixed.jsonl", include_unknown=True)
         report = fit_calibration(self.workspace / "mixed.jsonl", self.workspace / "calibration.json")
         self.assertEqual((report["model_identity"], report["unscored_examples"]), ("fixture-model", 1))
 

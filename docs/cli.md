@@ -828,7 +828,8 @@ export reviewed labels, split by workflow group
 
 ```text
 usage: fusion decisions export [-h] [--split {time,group-hash}]
-                               [--exclude-source SOURCE]
+                               [--exclude-source SOURCE] [--include-repo SLUG]
+                               [--include-unknown]
                                output
 
 positional arguments:
@@ -843,6 +844,10 @@ options:
                           leave out answers approved by this source, for example
                           lead_verdict, structural_gate, gym_grade or user_explicit;
                           repeatable
+  --include-repo SLUG     export rows from this owner/name even though
+                          export.exclude_repos lists it; repeatable
+  --include-unknown       export rows whose source repo cannot be determined (dropped by
+                          default)
 ```
 
 ## fusion decisions routing-report
@@ -1133,15 +1138,20 @@ options:
 export per-lane, per-work-class success priors for routing
 
 ```text
-usage: fusion gym priors [-h] [--out OUT] gym_dir
+usage: fusion gym priors [-h] [--out OUT] [--include-repo SLUG] [--include-unknown]
+                         gym_dir
 
 positional arguments:
   gym_dir
 
 options:
-  -h, --help  show this help message and exit
-  --out OUT   where to write them (default: lane_priors.json under ORC_HOME,
-              ~/.config/orc; `-` prints only)
+  -h, --help           show this help message and exit
+  --out OUT            where to write them (default: lane_priors.json under ORC_HOME,
+                       ~/.config/orc; `-` prints only)
+  --include-repo SLUG  count tasks from this owner/name even though export.exclude_repos
+                       lists it; repeatable
+  --include-unknown    count tasks whose source repo was not recorded (excluded by
+                       default)
 ```
 
 ## fusion quota

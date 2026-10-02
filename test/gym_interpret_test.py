@@ -165,7 +165,7 @@ class InterpretTest(Isolated):
         self.assertEqual(report["interpret"]["lanes"]["codex"]["holdout"]["total"], 4)
         self.assertIn("== interpret", gym.table(report))
         self.assertIn("holdout%", gym.table(report))
-        priors = gym.lane_priors(self.gym_dir)
+        priors = gym.lane_priors(self.gym_dir, include_unknown=True)
         stats = priors["priors"]["codex"]["interpret"]
         self.assertEqual((stats["successes"], stats["attempts"]), (4, 8))
         self.assertNotIn("read", priors["priors"]["codex"])
@@ -182,7 +182,7 @@ class InterpretTest(Isolated):
             [row] = gym.run(self.output, ["codex"], directory, kind="interpret", runner=self.fake_runner(behavior))["runs"]
             self.assertEqual(row["verdict"], verdict)
             self.assertEqual(row["scores"]["misread"], 0)
-            value = gym.lane_priors(directory)
+            value = gym.lane_priors(directory, include_unknown=True)
             if behavior == "tamper":
                 self.assertEqual(value["priors"], {})
             else:
@@ -191,7 +191,7 @@ class InterpretTest(Isolated):
         holdout_dir = self.root / "holdout-tasks"
         interp.extract(self.tasks, holdout_dir, 37, "2026-W39", split="holdout")
         gym.run(holdout_dir, ["codex"], self.root / "holdout-gym", kind="interpret", runner=self.fake_runner("trust"))
-        self.assertEqual(gym.lane_priors(self.root / "holdout-gym")["priors"], {})
+        self.assertEqual(gym.lane_priors(self.root / "holdout-gym", include_unknown=True)["priors"], {})
 
     def test_cli_alias_extract_report_priors_and_mode_rejection(self):
         parser = core.build_parser()
@@ -266,7 +266,7 @@ class InterpretTest(Isolated):
                 self.assertEqual(row["scores"], {})
                 self.assertEqual(row["grade_label"]["status"], "skipped")
                 self.assertIn("snapshot_error", row)
-                self.assertEqual(gym.lane_priors(directory)["priors"], {})
+                self.assertEqual(gym.lane_priors(directory, include_unknown=True)["priors"], {})
                 self.assertEqual(gym.report(directory)["incomplete"], [row["key"]])
                 self.assertFalse([e for e in read_jsonl(DecisionStore(directory).path)
                                   if e.get("source") == "gym_grade"])
@@ -274,7 +274,7 @@ class InterpretTest(Isolated):
                                  runner=self.fake_runner("trust"))["runs"]
                 self.assertTrue(retry["completed"])
                 self.assertEqual(retry["verdict"], "misread")
-                self.assertTrue(gym.lane_priors(directory)["priors"])
+                self.assertTrue(gym.lane_priors(directory, include_unknown=True)["priors"])
 
     def test_actual_fake_worker_runs_with_read_only_spec(self):
         # Exercise WorkflowRunner and the CLI adapter, beyond the injected runner.

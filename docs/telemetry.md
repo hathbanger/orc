@@ -185,7 +185,7 @@ otherwise "how much is caching actually saving the group" would be
 invisible in the exact data source built to answer that.
 
 There are no dedicated outbound prompt, model-output, changed-file, test-command,
-raw-blocker, local-filesystem or workspace-path fields. Role, route, model and
+raw-blocker, local-filesystem, workspace-path or source-repo fields. Role, route, model and
 trace identifiers are copied directly, however; arbitrary configured strings are
 not scrubbed. Local traces retain more detail than the remote payload.
 

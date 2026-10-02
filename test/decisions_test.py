@@ -752,7 +752,7 @@ class DecisionsTest(unittest.TestCase):
         for record in records[:2]:
             engine.store.label(record["id"], {"workflow": "build"}, "Reviewed request and accepted diff")
         output = self.workspace / "data.jsonl"
-        engine.store.export(output)
+        engine.store.export(output, include_unknown=True)
         rows = dataset_rows(output)
         self.assertEqual(len(rows), 2)
         self.assertEqual(len({row["split"] for row in rows}), 1)

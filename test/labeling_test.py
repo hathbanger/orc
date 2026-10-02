@@ -49,7 +49,7 @@ class LabelingTest(unittest.TestCase):
         value = {"answers": {}, "abstentions": {k: "Evidence is missing." for k in self.record["questions"]}}
         self.assertEqual(parse_suggestion(self.block(value), self.record, self.sources), value)
         self.store.append("label_suggestion", id="decision", verified=False, **value)
-        self.assertEqual(self.store.export(self.workspace / "dataset.jsonl")["examples"], 0)
+        self.assertEqual(self.store.export(self.workspace / "dataset.jsonl", include_unknown=True)["examples"], 0)
 
     def test_teacher_receives_explicit_boolean_labels_and_can_partially_answer(self):
         import fusion_core as core
@@ -82,7 +82,7 @@ class LabelingTest(unittest.TestCase):
         self.assertEqual(draft["answers"], answer["answers"])
         self.assertEqual(record, original)
         self.assertEqual(self.store.get(record["id"])["questions"], original["questions"])
-        self.assertEqual(self.store.export(self.workspace / "before.jsonl")["examples"], 0)
+        self.assertEqual(self.store.export(self.workspace / "before.jsonl", include_unknown=True)["examples"], 0)
         for wrong in (True, False, "unknown", 1):
             invalid = copy.deepcopy(answer)
             invalid["answers"]["needs_review"]["value"] = wrong
@@ -90,7 +90,7 @@ class LabelingTest(unittest.TestCase):
                 parse_suggestion(self.block(invalid), record, self.sources)
         self.store.label(record["id"], {"needs_review": "true"}, "E1 explicitly requests independent review", draft["suggestion_id"], replace=True)
         destination = self.workspace / "after.jsonl"
-        self.store.export(destination)
+        self.store.export(destination, include_unknown=True)
         self.assertEqual(json.loads(destination.read_text())["labels"], {"needs_review": "true"})
 
     def test_score_contract_uses_string_indices_without_changing_criteria(self):
@@ -147,7 +147,7 @@ class LabelingTest(unittest.TestCase):
         self.store.label("decision", {"specialty": "payments", "needs_review": "true"}, "Initial assessment")
         self.store.label("decision", {"specialty": "payments"}, "No evidence for needs_review", replace=True)
         path = self.workspace / "revised.jsonl"
-        self.store.export(path)
+        self.store.export(path, include_unknown=True)
         self.assertEqual(json.loads(path.read_text())["labels"], {"specialty": "payments"})
 
     def test_council_independent_prompts_consensus_and_approval_provenance(self):
@@ -168,7 +168,7 @@ class LabelingTest(unittest.TestCase):
         self.assertEqual(draft['answers']['specialty']['value'], 'payments')
         self.assertEqual(draft['council']['questions']['needs_review']['state'], 'insufficient')
         self.assertEqual(len(draft['council']['members']), 2)
-        self.assertEqual(self.store.export(self.workspace / 'before.jsonl')['examples'], 0)
+        self.assertEqual(self.store.export(self.workspace / 'before.jsonl', include_unknown=True)['examples'], 0)
         self.store.label('decision', {'specialty': 'payments'}, 'Checked E1', draft['suggestion_id'])
         event = read_jsonl(self.store.path)[-1]
         self.assertEqual(event['suggested_by']['labeling_mode'], 'council')
@@ -186,7 +186,7 @@ class LabelingTest(unittest.TestCase):
             self.assertEqual(draft['answers'], {})
             self.assertEqual(draft['council']['questions']['specialty']['state'], expected)
             self.assertIn('specialty', draft['abstentions'])
-        self.assertEqual(self.store.export(self.workspace / 'none.jsonl')['examples'], 0)
+        self.assertEqual(self.store.export(self.workspace / 'none.jsonl', include_unknown=True)['examples'], 0)
 
     def test_invalid_council_never_dispatches(self):
         import fusion_core as core

@@ -153,7 +153,7 @@ class LegacyOverBudgetLabelsTest(unittest.TestCase):
         [row] = decision_rows(self.workspace)
         self.assertEqual(row["garden_state"], "ineligible")
         self.assertEqual((tokens([row]), readiness([row])), ({}, {"train": 0, "validation": 0}))
-        exported = self.store.export(self.workspace / "legacy.jsonl")
+        exported = self.store.export(self.workspace / "legacy.jsonl", include_unknown=True)
         self.assertEqual((exported["examples"], exported["skipped_over_token_budget"]), (0, 1))
         with self.assertRaisesRegex(ValueError, "label only successful, complete model inputs"):
             self.store.label("legacy", {"plausible": "true"}, "Human check")
@@ -170,7 +170,7 @@ class LegacyOverBudgetLabelsTest(unittest.TestCase):
         self.assertEqual(fresh["state"], encoded(acceptance_state(self.task, self.result, 2200)))
         self.assertLessEqual(estimated_tokens(fresh["state"]), BUDGET)
         self.assertTrue(labelable_record(fresh))
-        exported = self.store.export(self.workspace / "repaired.jsonl")
+        exported = self.store.export(self.workspace / "repaired.jsonl", include_unknown=True)
         self.assertEqual((exported["examples"], exported["skipped_over_token_budget"]), (1, 0))
         core.record_outcome(self.workspace, self.run_id, False, "Second look: the race remains")
         self.assertEqual(len([e for e in read_jsonl(self.store.path) if e.get("event") == "decision"]), 2)
