@@ -436,6 +436,12 @@ have their own switch). `verification` governs plan commands only; authored
 `acceptance.checks` are unaffected by it.
 
 `python` or `FUSION_LAYA_PYTHON` can select a different runtime interpreter.
+A fusion process keeps at most one resident runtime (about 2 GB with a
+checkpoint loaded). It is keyed by interpreter, not by workspace or
+configuration: the device, checkpoint and timeout travel with each request,
+and a different interpreter closes the previous runtime first. The unit
+tests set `FUSION_LAYA_PYTHON=false`, and `make test` fails if any test
+resolves the installed runtime.
 `FUSION_DECISIONS_MODE=off` disables classification and decision logging.
 `mode: off` in configuration has the same effect. Existing orchestration
 and deterministic automatic routing still work.

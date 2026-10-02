@@ -39,5 +39,15 @@ class RunnerTest(unittest.TestCase):
             self.assertFalse(run_python.check_result(self.result(skip='requires the macOS Codex sandbox', identity=run_python.SANDBOX_PROBE), io.StringIO()))
             self.assertTrue(run_python.check_result(self.result(skip='installed Codex does not support named permission profiles', identity=run_python.SANDBOX_PROBE), io.StringIO()))
 
+    def test_resolving_the_installed_laya_runtime_fails_the_run(self):
+        module = type('Decisions', (), {'runtime_python': staticmethod(lambda options: options['python'])})
+        resolved = run_python.record_runtimes(module)
+        module.runtime_python({'python': 'false'})
+        self.assertEqual(run_python.managed_runtimes(resolved, io.StringIO()), [])
+        module.runtime_python({'python': str(run_python.MANAGED_LAYA)})
+        output = io.StringIO()
+        self.assertEqual(run_python.managed_runtimes(resolved, output), [str(run_python.MANAGED_LAYA)])
+        self.assertIn('installed Laya runtime', output.getvalue())
+
     def test_empty_suite_fails(self):
         self.assertFalse(run_python.check_result(unittest.TestResult(), io.StringIO()))
