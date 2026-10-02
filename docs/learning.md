@@ -380,6 +380,54 @@ the lane. Exit 2 (a malformed task) has no outcome and records nothing. ORC
 refuses an outcome that contradicts its exit code or names a different task.
 `decomp-grade` exits with the grader's code.
 
+`gym run --kind decomp` runs the lanes themselves:
+
+```bash
+fusion gym run /tmp/decomp-tasks --kind decomp --lanes claude-opus-high codex --workspace /tmp/decomp-gym \
+  [--repo-path /path/to/decomp-repo] [--grader CMD] [--binary PATH] [--image REF] \
+  [--max-tasks N] [--budget-usd X] [--keep-worktrees]
+```
+
+TASKS is a task file or a directory of them (directly or one per
+subdirectory). Mode is always hidden, and rows are keyed as `decomp-grade`
+keys them, so a run resumes past completed keys; `--max-tasks` and
+`--budget-usd` behave as for the other kinds. Each lane gets a fresh
+disposable Git repository outside the gym, as interpret does. Its one
+baseline commit holds the starting tree and `check.py`. The starting tree is
+the task's `base_commit` of `--repo-path` (exported without history, so later
+commits that hold the match never reach the worker), else a copy of the
+`start/` directory next to the task file. A task with neither is skipped
+with the reason "no starting tree". Nothing else in the task's directory
+reaches the worker tree: it may hold answer-bearing files. The task file stays
+where it is, and the grader reads it there.
+
+`check.py` runs `<grader> grade --task <task> --candidate . --out .decomp-out
+--json` (plus `--binary`/`--image`), prints PASS, FAIL with `fail_reason` or
+HOLD, then the grader's log lines, and exits with the grader's code.
+`.decomp-out/` is ignored by the tree's Git exclude file, but `check.py`
+itself is committed, so editing it is tampering. The lane runs as one write
+node whose `verification_argv` is `python3 check.py`, so Claude Code's allowed
+tools and OpenCode's writer bash policy permit the checker. The brief names
+the target functions, the unit source, the stratum and the editable files
+(the task's `editable`, else the target unit's source). It forbids inline
+asm, `register`, `#pragma` and `__attribute__`, requires `python3 check.py`
+to print PASS, and warns that other functions in the file may read as not
+exact until the target matches, because GCC optimizes the whole file. A
+`prompt.md` next to the task file (open-source task sources put the target
+disassembly there) is appended.
+
+After the worker exits, the gym diffs the tree against the baseline. New
+files the tree's own `.gitignore` hides count too, but the checker's scratch
+does not. Any changed path outside the editable files is tampering. The tree
+is then graded officially with the worker's cost and tokens, and the grader
+output, patch and runtime archive go under
+`results/<task>/decomp/<lane>/` in the gym. A tampered run is recorded as
+`tampered` (with `tampered` paths and the `graded_verdict`) and never counts
+toward priors. A hold stays a hold. A lane that never dispatched is not
+graded, and neither is a grader refusal (exit 2); both stay incomplete and
+are retried. `--keep-worktrees` keeps the tree under the evidence directory;
+otherwise it is removed.
+
 Priors are per stratum. Each lane gets a work class `decomp:<stratum>`
 (matched vs unmatched, holds excluded), and `game` and `stratum` are opaque
 strings. A task's reference commit proves that it can be matched, so unlike
