@@ -209,10 +209,14 @@ def overflow_only(config, choices, drop):
     return [c for c in choices if c["route"] not in overflow]
 
 
-def route_candidates(config, task, store, rejected=None, quota_audit=None, minimum=None):
+def route_candidates(config, task, store, rejected=None, quota_audit=None, minimum=None, pool_models=False):
     """Pass `rejected` to collect why each lane was dropped. The reasons live
     beside the checks that produce them so an explanation can never drift from
-    the filter it is explaining."""
+    the filter it is explaining. With `pool_models`, each candidate also
+    carries `pooled`: the local verified evidence of every lane in the recent
+    history that runs the same agent, model and effort, including lanes this
+    decision filtered out (a subscription lane out of quota still teaches
+    about its model). Gym priors never enter it."""
     import fusion_core as core
 
     def drop(key, why):
@@ -272,6 +276,24 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
                     unavailable_commands.add(family)
         seen.add(key)
         seen_commands.add(family)
+    def lane_evidence(spans, with_spans=False):
+        """(verified, evidence_scope, same) for these spans, plus the counted
+        spans themselves with `with_spans`."""
+        # A success is the worker's claim until a gate or lead checks it; an
+        # error is observed. Quota and permission failures are lane health
+        # (cooldown), not evidence about quality.
+        evidence = [(span, outcomes[span["run_id"]] if span.get("run_id") in outcomes else False) for span in spans
+                    if span.get("run_id") not in untrusted and (span.get("run_id") in outcomes or
+                        (span.get("status") == "error" and span.get("failure_class") not in {"quota", "permission_denied"}))]
+        # Read-only and writing work differ: this task's class counts when
+        # it has any evidence, else every class pooled.
+        same = [(span, ok) for span, ok in evidence if "write" in span and bool(span["write"]) == (work == "write")]
+        role_evidence = [(span, ok) for span, ok in evidence if role and normalize_role(span.get("role")) == role]
+        evidence_scope = "role" if role and len(role_evidence) >= minimum else "work"
+        counted = role_evidence if evidence_scope == "role" else same or evidence
+        result = ([ok for _, ok in counted], evidence_scope, [ok for _, ok in same])
+        return (*result, [span for span, _ in counted]) if with_spans else result
+
     choices = []
     pool = auto_pool(config, task)
     automatic = task.get("agent", "auto") == "auto" and not task.get("route")
@@ -390,18 +412,7 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         split = arms > 1 and len(models) > 1
         for model in models:
             spans = [span for span in history[key] if not split or span.get("model") == model]
-            # A success is the worker's claim until a gate or lead checks it; an
-            # error is observed. Quota and permission failures are lane health
-            # (cooldown), not evidence about quality.
-            evidence = [(span, outcomes[span["run_id"]] if span.get("run_id") in outcomes else False) for span in spans
-                        if span.get("run_id") not in untrusted and (span.get("run_id") in outcomes or
-                            (span.get("status") == "error" and span.get("failure_class") not in {"quota", "permission_denied"}))]
-            # Read-only and writing work differ: this task's class counts when
-            # it has any evidence, else every class pooled.
-            same = [ok for span, ok in evidence if "write" in span and bool(span["write"]) == (work == "write")]
-            role_evidence = [ok for span, ok in evidence if role and normalize_role(span.get("role")) == role]
-            evidence_scope = "role" if role and len(role_evidence) >= minimum else "work"
-            verified = role_evidence if evidence_scope == "role" else same or [ok for _, ok in evidence]
+            verified, evidence_scope, same = lane_evidence(spans)
             costs = [core.number(span["usage"].get("cost_usd", span["usage"].get("cost", 0))) for span in spans
                      if "cost_usd" in span.get("usage", {}) or "cost" in span.get("usage", {})]
             mean_cost = sum(costs) / len(costs) if costs else None
@@ -444,6 +455,26 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
                             "mean_cost_usd_cold": sum(split_costs[False]) / len(split_costs[False]) if split_costs[False] else None,
                             "session_idle_s": lane_idle, "warm": lane_idle is not None and lane_idle * 1000 < ttl_ms,
                             "mean_ms": sum(s.get("duration_ms", 0) for s in spans) / len(spans) if spans else None})
+    if pool_models:
+        families = defaultdict(dict)
+        for key, spans in history.items():
+            for span in spans:
+                try:
+                    settings = core.agent_settings(config, {"agent": span.get("agent"), "route": span.get("route")})
+                except ValueError:
+                    continue
+                family = (span.get("agent"), settings.get("model") or span.get("model") or "", settings.get("reasoning_effort"))
+                families[family].setdefault(span.get("run_id") or id(span), (key, span))
+        for choice in choices:
+            members = families.get((choice["agent"], choice.get("model") or "", choice.get("reasoning_effort")), {})
+            verified, scope, _, counted = lane_evidence([span for _, span in members.values()], with_spans=True)
+            costs = [core.number(span["usage"].get("cost_usd", span["usage"].get("cost", 0))) for span in counted
+                     if "cost_usd" in span.get("usage", {}) or "cost" in span.get("usage", {})]
+            # Reported spend over the counted runs per accepted one; None until
+            # a run is accepted or when no counted run reported a cost.
+            choice["pooled"] = {"successes": sum(verified), "attempts": len(verified), "scope": scope,
+                                "lanes": sorted({key for key, _ in members.values()}),
+                                "cost_per_accepted": round(sum(costs) / sum(verified), 4) if costs and sum(verified) else None}
     return rank_by_quota(overflow_only(config, choices, drop) if automatic else choices)
 
 
@@ -521,6 +552,61 @@ def write_trial(config, task, candidates, minimum):
     chosen = min(unproven, key=lambda c: c.get("checked_runs_local") or 0)
     trial = {"route": chosen["route"], "checked_runs": chosen.get("checked_runs_local") or 0, "minimum": minimum}
     return [chosen] + [c for c in candidates if c is not chosen], trial
+
+
+GATING_POLICIES = ("rank", "thompson")
+POSTERIOR_DRAWS = 4000
+
+
+def gating_policy(config):
+    """`decisions.gating_policy`: how automatic gating work (a writer or a
+    review) picks among ranked lanes. `rank` (default) takes the top lane;
+    `thompson` samples each model's chance of being the best from its pooled
+    local evidence and takes the winner."""
+    value = (config.get("decisions") or {}).get("gating_policy", "rank")
+    if value not in GATING_POLICIES:
+        raise ValueError(f"decisions.gating_policy must be one of {', '.join(GATING_POLICIES)}")
+    return value
+
+
+def model_family(candidate):
+    return candidate["agent"], candidate.get("model") or "", candidate.get("reasoning_effort")
+
+
+def thompson(candidates, task, rng):
+    """(candidates, sampled). One Beta(1 + successes, 1 + failures) draw per
+    model family from its pooled local evidence; the family with the highest
+    draw leads, and within a family the ranked order picks the lane. A review
+    that prefers a different agent samples only among other agents when any
+    is available. `sampled` holds each family's posterior, its chance of
+    winning (seeded per task, so the logged propensities are reproducible)
+    and the chosen lane."""
+    other = task.get("prefer_different_agent")
+    eligible = [c for c in candidates if not other or c["agent"] != other] if other and any(
+        c["agent"] != other for c in candidates) else list(candidates)
+    families = {}
+    for candidate in eligible:
+        families.setdefault(model_family(candidate), candidate)
+    def posterior(candidate):
+        pooled = candidate.get("pooled") or {}
+        successes, attempts = pooled.get("successes", 0), pooled.get("attempts", 0)
+        return 1 + successes, 1 + attempts - successes
+    params = {family: posterior(lead) for family, lead in families.items()}
+    draws = {family: rng.betavariate(*params[family]) for family in families}
+    winner = max(families, key=lambda family: draws[family])
+    seeded = random.Random(str(task.get("run_id") or task.get("task") or ""))
+    wins = dict.fromkeys(families, 0)
+    for _ in range(POSTERIOR_DRAWS):
+        sample = {family: seeded.betavariate(*params[family]) for family in families}
+        wins[max(families, key=lambda family: sample[family])] += 1
+    chosen = families[winner]
+    sampled = {"policy": "thompson", "chosen": chosen["key"], "draw": round(draws[winner], 4),
+               "families": [{"agent": family[0], "model": family[1], "reasoning_effort": family[2],
+                             "lead": lead["key"], **{k: (lead.get("pooled") or {}).get(k) for k in
+                                                     ("successes", "attempts", "lanes", "cost_per_accepted")},
+                             "p_win": round(wins[family] / POSTERIOR_DRAWS, 4)}
+                            for family, lead in families.items()]}
+    return [chosen] + [c for c in candidates if c is not chosen], sampled
 
 
 ROUTING_RNG = random.Random()
@@ -696,14 +782,16 @@ def route_task(config, task, store, rng=None):
         warm_epsilon = cache["warm_epsilon"] if cache["configured"] else None
         cost_epsilon = config.get("decisions", {}).get("cost_epsilon", 0.05)
         within_route = False
-        minimum = explore = trial = None
+        minimum = explore = trial = sampled = None
         needs_unmet = False
+        sampling = bool(automatic and ranking and gating(task) and gating_policy(config) == "thompson")
         if automatic:
-            candidates = route_candidates(config, task, store, rejected=rejected, quota_audit=quota_audit)
+            candidates = route_candidates(config, task, store, rejected=rejected, quota_audit=quota_audit, pool_models=sampling)
             if not candidates and task.get("needs"):
                 # No lane can meet the needs: run blind on the full pool rather than refuse the work.
                 needs_unmet = True
-                candidates = route_candidates(config, {**task, "needs": []}, store, rejected=rejected, quota_audit=quota_audit)
+                candidates = route_candidates(config, {**task, "needs": []}, store, rejected=rejected, quota_audit=quota_audit,
+                                              pool_models=sampling)
             if ranking:
                 minimum, explore = exploration(ranking, task, candidates)
                 candidates = rank_by_outcomes(candidates, minimum, warm_epsilon, explore, cost_epsilon)
@@ -712,8 +800,12 @@ def route_task(config, task, store, rng=None):
                     # different harness than the implementer when one is available.
                     candidates.sort(key=lambda item: item["agent"] == task["prefer_different_agent"])
             candidates = rank_by_quota(candidates)
-            candidates, trial = write_trial(config, task, candidates, minimum or (
-                int(ranking) if ranking and not isinstance(ranking, bool) else 3))
+            if sampling and len(candidates) > 1:
+                # Sampling decides over time; write_trials is superseded.
+                candidates, sampled = thompson(candidates, task, rng or ROUTING_RNG)
+            elif not sampling:
+                candidates, trial = write_trial(config, task, candidates, minimum or (
+                    int(ranking) if ranking and not isinstance(ranking, bool) else 3))
         else:
             from fusion_reasoning import pair_candidates, pair_key
             settings = core.agent_settings(config, task)
@@ -757,6 +849,8 @@ def route_task(config, task, store, rng=None):
             applied = True
     if applied or selected["route"] != (trial or {}).get("route"):
         trial = None
+    if applied:
+        sampled = None
     # Epsilon exploration: ordinary read-only work only, among lanes that
     # already passed every filter, never over a qualified recommendation or a
     # pinned lane, and only when the routing log that makes it useful is kept.
@@ -788,14 +882,21 @@ def route_task(config, task, store, rng=None):
                   "configured preference order; advice does not change dispatch")
         if trial:
             reason += f"; write trial promoted this unproven lane ({trial['checked_runs']} of {trial['minimum']} checked runs)"
+        if sampled:
+            won = next(f for f in sampled["families"] if f["lead"] == sampled["chosen"])
+            reason += (f"; sampled by model posterior ({won['successes']}/{won['attempts']} accepted, "
+                       f"{won['p_win']:.0%} chance best)")
         engine.applied(record, selected["key"], applied, reason + ("; epsilon exploration picked this lane" if explored else ""))
     if scope and (engine.options["mode"] != "off" or quota_audit):
         keys = [c["key"] for c in candidates]
         chances = propensities(keys, selected["key"], 0.0 if applied or trial else effective)
+        if sampled:
+            wins = {f["lead"]: f["p_win"] for f in sampled["families"]}
+            chances = {key: wins.get(key, 0.0) for key in keys}
         engine.store.append("routing_log", **context(task), decision_id=record["id"] if record else None, scope=scope,
                             write=bool(task.get("write")),
                             **({"needs": task["needs"], "needs_unmet": needs_unmet} if task.get("needs") else {}),
-                            policy={"rank_by_outcomes": minimum, "explore": explore, "warm_epsilon": warm_epsilon if ranking else None,
+                            policy={"rank_by_outcomes": minimum, "explore": explore, "gating_policy": gating_policy(config), "warm_epsilon": warm_epsilon if ranking else None,
                                     "epsilon": effective, "routing_epsilon": epsilon, "laya_applied": applied,
                                     "priors": priors_policy(config),
                                     **({"cost_epsilon": cost_epsilon if warm_epsilon is None else max(warm_epsilon, cost_epsilon)}
@@ -803,7 +904,8 @@ def route_task(config, task, store, rng=None):
                                     **({"quota": quota_settings(config)} if quota_audit else {})},
                             **({"quota": quota_audit, "rejected": rejected} if quota_audit else {}),
                             candidates=[{**c, "propensity": chances[c["key"]]} for c in candidates],
-                            chosen=selected["key"], explored=explored, **({"write_trial": trial} if trial else {}))
+                            chosen=selected["key"], explored=explored, **({"write_trial": trial} if trial else {}),
+                            **({"sampled": sampled} if sampled else {}))
 
 
 def effective_outcomes(events):
