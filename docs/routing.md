@@ -283,6 +283,16 @@ present for that lane, otherwise `read`. Roles containing `locate` or `localize`
 use `read`; writing tasks always use `write`. Other roles keep their existing
 work class. The selected class is recorded in each candidate's `prior.class`.
 
+`fusion gym priors-merge FILE[@WEIGHT]...` pools priors files from several
+machines into one and prints it; pass `--out PATH` to write it (routing reads
+`lane_priors.json` under ORC_HOME): per lane (agent, model, effort) and work class, weighted
+attempts and successes add up and means are attempt-weighted. Route names are
+machine-local and dropped, so only lane identity and counts travel; `--rename
+FROM=TO` maps a private proxy's model ids to vendor ids first. `fusion gym
+priors-seed --map AGENT:MODEL[:EFFORT]=SLUG` writes small starting priors from a
+public leaderboard (`data/quality.json`): a few pseudo-attempts on `write` at the
+model's index / 100, so a handful of verified outcomes outweighs it.
+
 Set `decisions.priors` to `false` to disable them, or set its `path` to a different
 export. Priors do not confer permissions or bypass availability, fit or quota
 checks. See [gym evidence](learning.md#gym) and

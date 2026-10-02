@@ -63,6 +63,8 @@ after its name. Aliases and hidden subcommands are included below.
 - [fusion gym report](#fusion-gym-report)
 - [fusion gym audit](#fusion-gym-audit)
 - [fusion gym priors](#fusion-gym-priors)
+- [fusion gym priors-merge](#fusion-gym-priors-merge)
+- [fusion gym priors-seed](#fusion-gym-priors-seed)
 - [fusion quota](#fusion-quota)
 - [fusion quota probe](#fusion-quota-probe)
 - [fusion quota rates](#fusion-quota-rates)
@@ -996,10 +998,11 @@ options:
 replay merged fix PRs as benchmark tasks across lanes
 
 ```text
-usage: fusion gym [-h] {extract,interpret-seed,run,report,audit,priors} ...
+usage: fusion gym [-h]
+                  {extract,interpret-seed,run,report,audit,priors,priors-merge,priors-seed} ...
 
 positional arguments:
-  {extract,interpret-seed,run,report,audit,priors}
+  {extract,interpret-seed,run,report,audit,priors,priors-merge,priors-seed}
     extract               turn squash-merged fix PRs into tasks with FAIL_TO_PASS tests
     interpret-seed        build read-only evidence tasks from existing gym fix tasks
     run                   run each task on each lane in its own worktree (resumable)
@@ -1007,6 +1010,10 @@ positional arguments:
     audit                 retract negatives from tasks no lane has solved; restore them
                           once one does
     priors                export per-lane, per-work-class success priors for routing
+    priors-merge          pool priors files from several machines into one (counts only,
+                          no route names)
+    priors-seed           small starting priors for lanes from a public leaderboard
+                          (data/quality.json)
 
 options:
   -h, --help              show this help message and exit
@@ -1142,6 +1149,45 @@ options:
   -h, --help  show this help message and exit
   --out OUT   where to write them (default: lane_priors.json under ORC_HOME,
               ~/.config/orc; `-` prints only)
+```
+
+## fusion gym priors-merge
+
+pool priors files from several machines into one (counts only, no route names)
+
+```text
+usage: fusion gym priors-merge [-h] [--rename FROM=TO] [--out OUT]
+                               FILE[@WEIGHT] [FILE[@WEIGHT] ...]
+
+positional arguments:
+  FILE[@WEIGHT]     priors files; append @0.5 to weight one (default 1)
+
+options:
+  -h, --help        show this help message and exit
+  --rename FROM=TO  rename a model id before pooling, e.g. a private proxy name to the
+                    vendor id (repeatable)
+  --out OUT         where to write the merged file (default `-`: print only; routing
+                    reads lane_priors.json under ORC_HOME)
+```
+
+## fusion gym priors-seed
+
+small starting priors for lanes from a public leaderboard (data/quality.json)
+
+```text
+usage: fusion gym priors-seed [-h] --map AGENT:MODEL[:EFFORT]=SLUG [--quality QUALITY]
+                              [--metric {agentic,coding,intelligence}]
+                              [--attempts ATTEMPTS] [--out OUT]
+
+options:
+  -h, --help              show this help message and exit
+  --map AGENT:MODEL[:EFFORT]=SLUG
+                          a lane and its leaderboard slug, e.g. claude:claude-
+                          opus-5-5:high=claude-opus-5 (repeatable)
+  --quality QUALITY       leaderboard file (default: the repo's data/quality.json)
+  --metric {agentic,coding,intelligence}
+  --attempts ATTEMPTS     pseudo-attempts per lane (default 4)
+  --out OUT               where to write the seed file (default `-`: print only)
 ```
 
 ## fusion quota
