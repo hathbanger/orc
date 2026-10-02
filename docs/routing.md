@@ -266,7 +266,8 @@ use `read`; writing tasks always use `write`. Other roles keep their existing
 work class. The selected class is recorded in each candidate's `prior.class`.
 
 `fusion gym priors-merge FILE[@WEIGHT]...` pools priors files from several
-machines into one: per lane (agent, model, effort) and work class, weighted
+machines into one and prints it; pass `--out PATH` to write it (routing reads
+`lane_priors.json` under ORC_HOME): per lane (agent, model, effort) and work class, weighted
 attempts and successes add up and means are attempt-weighted. Route names are
 machine-local and dropped, so only lane identity and counts travel; `--rename
 FROM=TO` maps a private proxy's model ids to vendor ids first. `fusion gym

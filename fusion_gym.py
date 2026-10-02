@@ -1620,7 +1620,7 @@ def add_parser(sub):
                            help="priors files; append @0.5 to weight one (default 1)")
     merge_cmd.add_argument("--rename", action="append", default=[], metavar="FROM=TO",
                            help="rename a model id before pooling, e.g. a private proxy name to the vendor id (repeatable)")
-    merge_cmd.add_argument("--out", help="where to write the merged file (default: lane_priors.json under ORC_HOME; `-` prints only)")
+    merge_cmd.add_argument("--out", default="-", help="where to write the merged file (default `-`: print only; routing reads lane_priors.json under ORC_HOME)")
     seed_cmd = commands.add_parser("priors-seed", help="small starting priors for lanes from a public leaderboard (data/quality.json)")
     seed_cmd.add_argument("--map", action="append", required=True, metavar="AGENT:MODEL[:EFFORT]=SLUG",
                           help="a lane and its leaderboard slug, e.g. claude:claude-opus-5-5:high=claude-opus-5 (repeatable)")
@@ -1693,7 +1693,7 @@ def command(args, workspace, as_json=False, out=None):
                 raise ValueError("--rename takes FROM=TO")
             renames[old] = new
         value = merge_priors(inputs, renames)
-        path = None if args.out == "-" else write_priors(value, args.out or default_priors_path())
+        path = None if args.out == "-" else write_priors(value, args.out)
         print(json.dumps(value, indent=2) if as_json else
               priors_table(value) + (f"\nwrote {path}" if path else ""), file=out)
         return 0

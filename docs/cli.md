@@ -1166,8 +1166,8 @@ options:
   -h, --help        show this help message and exit
   --rename FROM=TO  rename a model id before pooling, e.g. a private proxy name to the
                     vendor id (repeatable)
-  --out OUT         where to write the merged file (default: lane_priors.json under
-                    ORC_HOME; `-` prints only)
+  --out OUT         where to write the merged file (default `-`: print only; routing
+                    reads lane_priors.json under ORC_HOME)
 ```
 
 ## fusion gym priors-seed

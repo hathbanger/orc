@@ -2,10 +2,12 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fusion_core as core
@@ -71,6 +73,17 @@ class PriorsMergeTest(unittest.TestCase):
             value = json.loads(out.read_text())
             self.assertEqual(value["priors"]["opencode:openai/gpt-x"]["write"]["attempts"], 2.0)
             self.assertEqual([i["weight"] for i in value["inputs"]], [1.0, 0.5])
+
+    def test_cli_merge_prints_by_default_and_leaves_live_priors_alone(self):
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {"ORC_HOME": d}):
+            root = Path(d)
+            (root / "a.json").write_text(json.dumps(LAPTOP))
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                code = core.main(["--workspace", str(root), "gym", "priors-merge", str(root / "a.json")])
+            self.assertEqual(code, 0)
+            self.assertFalse(gym.default_priors_path().exists())
+            self.assertNotIn("wrote", printed.getvalue())
 
     def test_seed_from_a_leaderboard_is_small_and_names_its_source(self):
         quality = {"source": "board", "fetchedAt": "2026-08-28", "records": [{"slug": "opus", "codingIndex": 75.0}]}
