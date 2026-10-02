@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fusion_core as core
+import fusion_decisions
 from fusion_build import prepare
 from fusion_decisions import (DecisionEngine, DecisionStore, ACCEPTANCE_QUESTIONS, INTAKE_QUESTIONS, RECOVERY_QUESTIONS,
                               REVIEW_QUESTIONS, LayaRuntime, DEFAULTS, digest, fit_calibration, read_jsonl,
@@ -540,6 +541,36 @@ class DecisionsTest(unittest.TestCase):
         self.assertIsNone(runtime.error)
         self.assertIsNotNone(runtime.process)
         self.assertEqual(runtime.predict("x", INTAKE_QUESTIONS)["answers"]["needs_clarification"], {"noul": .9})
+
+    def test_one_runtime_per_interpreter_sends_each_workspaces_options_and_closes_the_stale_one(self):
+        log, serve = self.workspace / "requests.jsonl", self.workspace / "serve.py"
+        serve.write_text("import json, os, sys\n"
+                         f"log = open({str(log)!r}, 'a')\n"
+                         "for line in sys.stdin:\n"
+                         "    request = json.loads(line)\n"
+                         "    log.write(json.dumps({'pid': os.getpid(), 'model_path': request['model_path']}) + '\\n'); log.flush()\n"
+                         "    print(json.dumps({'answers': {}, 'model_identity': 'fake'}), flush=True)\n")
+        helper = self.workspace / "runtime"
+        helper.write_text(f"#!/bin/sh\nexec {sys.executable} {serve}\n")
+        helper.chmod(0o755)
+        other = self.workspace / "other-runtime"
+        other.write_text(helper.read_text())
+        other.chmod(0o755)
+        with patch.dict("fusion_decisions._runtimes", clear=True):
+            try:
+                for python, name in ((helper, "one"), (helper, "two"), (other, "three")):
+                    options = {**DEFAULTS, "python": str(python), "timeout_seconds": 10, "model_path": name, "threshold": .5}
+                    fusion_decisions.runtime_for(options).predict("x", INTAKE_QUESTIONS)
+                    if name == "two":
+                        first = fusion_decisions._runtimes[str(helper)]
+                self.assertEqual(list(fusion_decisions._runtimes), [str(other)])
+                self.assertIsNone(first.process)
+            finally:
+                fusion_decisions.close_runtimes()
+        rows = read_jsonl(log)
+        self.assertEqual([row["model_path"] for row in rows], ["one", "two", "three"])
+        self.assertEqual(rows[0]["pid"], rows[1]["pid"])
+        self.assertNotEqual(rows[1]["pid"], rows[2]["pid"])
 
     def test_one_option_choice_abstains_before_reaching_the_backend(self):
         engine = self.engine({"route": "only"})
