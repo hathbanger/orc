@@ -505,7 +505,8 @@ def write_trials(config):
 
 def write_trial(config, task, candidates, minimum):
     """(candidates, trial). Gating work never explores, so a lane listed in
-    `decisions.write_trials` with fewer than `minimum` checked runs takes the
+    `decisions.write_trials` with fewer than `minimum` local checked runs
+    (gym prior pseudo-attempts do not count) takes the
     pick (fewest runs first, then candidate order) until it has the evidence
     to rank like any other lane. Only listed lanes that survived every filter
     are promoted; independence from the implementer still comes first."""
@@ -513,12 +514,12 @@ def write_trial(config, task, candidates, minimum):
     if not trials or not gating(task) or not candidates:
         return candidates, None
     other = task.get("prefer_different_agent")
-    unproven = [c for c in candidates if c["route"] in trials and (c.get("checked_runs") or 0) < minimum
+    unproven = [c for c in candidates if c["route"] in trials and (c.get("checked_runs_local") or 0) < minimum
                 and not (other and c["agent"] == other and candidates[0]["agent"] != other)]
     if not unproven:
         return candidates, None
-    chosen = min(unproven, key=lambda c: c.get("checked_runs") or 0)
-    trial = {"route": chosen["route"], "checked_runs": chosen.get("checked_runs") or 0, "minimum": minimum}
+    chosen = min(unproven, key=lambda c: c.get("checked_runs_local") or 0)
+    trial = {"route": chosen["route"], "checked_runs": chosen.get("checked_runs_local") or 0, "minimum": minimum}
     return [chosen] + [c for c in candidates if c is not chosen], trial
 
 

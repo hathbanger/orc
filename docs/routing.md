@@ -98,14 +98,16 @@ A writer or a review never explores: once any lane has `minimum` checked runs,
 the unproven lanes rank below it, so a newly admitted lane never earns write
 evidence. Routes listed in `decisions.write_trials` are the exception. During
 automatic routing of gating work, a listed lane that survived every filter
-with fewer than `minimum` checked runs moves to the top after ranking (fewest
-checked runs first, then candidate order) and takes the pick. When it reaches
-`minimum` it ranks on its evidence like every other lane, so the trial ends by
-itself. Unlisted lanes are never promoted; overflow lanes are already removed
+with fewer than `minimum` local checked runs moves to the top after ranking
+(fewest first, then candidate order) and takes the pick. Gym prior
+pseudo-attempts do not count toward a trial: priors are measured elsewhere, and
+the trial exists to earn evidence on this machine's own work. When the lane has
+`minimum` local checked runs it ranks on its evidence (priors included) like
+every other lane, so the trial ends by itself. Unlisted lanes are never promoted; overflow lanes are already removed
 while a primary lane survives; a qualified Laya recommendation still wins;
 pinned routes are unaffected. A review that prefers a different agent does
 not promote a lane on the implementer's agent. The routing log row records
-`write_trial` (`route`, `checked_runs`, `minimum`) with propensity 1.0 for the
+`write_trial` (`route`, `checked_runs` local, `minimum`) with propensity 1.0 for the
 chosen lane, and the applied reason names the write trial.
 
 ### Automatic pool

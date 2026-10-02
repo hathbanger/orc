@@ -109,8 +109,9 @@ or route. Unset, every configured lane is a candidate.
 ships or gates (a writer or a review) before they have evidence for it. Gating
 work never explores, so without it a new lane never gets its first write while
 a proven lane survives. While a listed lane survives the automatic filters and
-has fewer checked runs than the `decisions.rank_by_outcomes` minimum (default
-`3`), it takes the pick ahead of the ranked order; at the minimum it ranks on
+has fewer local checked runs than the `decisions.rank_by_outcomes` minimum
+(default `3`; gym prior pseudo-attempts do not count), it takes the pick ahead
+of the ranked order; at the minimum it ranks on
 its evidence. Lanes not listed are never promoted, overflow lanes stay out
 while a primary survives, and a qualified Laya recommendation still wins. It
 must be a list of route names; anything else is an error. See

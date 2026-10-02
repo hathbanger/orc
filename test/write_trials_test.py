@@ -1,4 +1,5 @@
 """decisions.write_trials lets a listed, unproven lane earn evidence on gating work."""
+import json
 import os
 from pathlib import Path
 import sys
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fusion_core as core
+import fusion_gym as gym
 import fusion_policy as policy
 from fusion_decisions import DecisionEngine, DecisionStore, read_jsonl
 
@@ -84,6 +86,21 @@ class WriteTrialsTest(unittest.TestCase):
         self.checked('fable', 3)
         for _ in range(5):
             self.assertNotEqual(self.route()['route'], 'flash')
+
+    def test_gym_priors_do_not_end_a_trial(self):
+        home = self.root / 'orc'
+        home.mkdir(parents=True, exist_ok=True)
+        (home / 'lane_priors.json').write_text(json.dumps({'schema': gym.PRIORS_SCHEMA, 'generated_at': 't', 'priors': {
+            'claude:claude-fable-5': {'agent': 'claude', 'route': None, 'model': 'claude-fable-5', 'reasoning_effort': None,
+                                      'write': {'attempts': 12, 'successes': 12}}}}))
+        self.config['decisions'].update(priors={}, write_trials=['fable'])
+        self.checked('opus', 3)
+        task = core.make_task(self.root, 'auto', 'fixture', 'implementation', [], [], None, False, True)
+        fable = next(c for c in policy.route_candidates(self.config, task, self.store) if c['route'] == 'fable')
+        self.assertEqual(fable['checked_runs_local'], 0)
+        self.assertGreaterEqual(fable['checked_runs'], 3)
+        self.assertEqual(self.route()['route'], 'fable')
+        self.assertEqual(self.last_log()['write_trial'], {'route': 'fable', 'checked_runs': 0, 'minimum': 3})
 
     def test_a_review_is_gating_work_and_takes_a_trial(self):
         self.config['decisions']['write_trials'] = ['fable']
