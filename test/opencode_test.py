@@ -386,3 +386,39 @@ class OpenCodeCouncilTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 labeling.assessment(Path(d), self.config, record, [], "oc-gemini")
         self.assertEqual((seen[0]["agent"], seen[0]["route"]), ("opencode", "oc-gemini"))
+
+
+class PinnedLaneSessionTest(unittest.TestCase):
+    """Delegates pinned to different routes of one harness keep separate sessions."""
+
+    def test_routes_and_models_do_not_share_a_resumed_session(self):
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {"FUSION_DECISIONS_MODE": "off", "FUSION_TELEMETRY": "0"}):
+            root = Path(d)
+            worker = root / "opencode-fixture"
+            worker.write_text(f"#!{sys.executable}\n" + """import json,sys
+session = sys.argv[sys.argv.index('--session') + 1] if '--session' in sys.argv else None
+model = sys.argv[sys.argv.index('-m') + 1]
+print(json.dumps({'type': 'text', 'sessionID': 'ses-' + model.replace('/', '-'), 'part': {'type': 'text', 'text': 'STATUS: success' + chr(10) + 'SUMMARY: ' + str(session)}}))
+print(json.dumps({'type': 'step_finish', 'sessionID': 'ses-' + model.replace('/', '-'), 'part': {'reason': 'stop', 'tokens': {'input': 1, 'output': 1}, 'cost': 0.001}}))
+""")
+            worker.chmod(0o755)
+            config = core.deep_merge(core.DEFAULTS, {"opencode": {"command": str(worker)}, "decisions": {"mode": "off"},
+                                                     "routes": {"a": {"agent": "opencode", "model": "x/a"},
+                                                                "b": {"agent": "opencode", "model": "x/b"}}})
+            store = core.RunStore(root)
+
+            def delegate(route, model=None):
+                task = core.make_task(root, "opencode", "Review", "reviewer", [], [], None, True, False, route=route,
+                                      settings_overrides={"model": model} if model else None)
+                return core.dispatch(config, task, store), task
+
+            first, task_a = delegate("a")
+            second, task_b = delegate("b")
+            again, _ = delegate("a")
+            self.assertNotEqual(task_a["session_key"], task_b["session_key"])
+            self.assertEqual(first["summary"], "None")
+            self.assertEqual(second["summary"], "None")          # b did not resume a's session
+            self.assertEqual(again["summary"], "ses-x-a")        # a resumes its own
+            override, task_c = delegate("a", "x/c")
+            self.assertEqual(override["summary"], "None")        # a model override is its own lane
+            self.assertIn(":lane=a:x/c", task_c["session_key"])

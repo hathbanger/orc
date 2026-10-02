@@ -2265,6 +2265,16 @@ def dispatch(
         if not task["session_key"].endswith(suffix):
             task["session_key"] += suffix
     route_task(config, task, store)
+    # A session belongs to one lane: a pinned route or model override must not
+    # resume another lane's conversation under the shared `agent:role` key (a
+    # different model, account or even harness). Automatic routing already
+    # suffixes its choice; bare agents keep their legacy key.
+    if task.get("requested_agent") != "auto":
+        pinned_model = (task.get("settings_overrides") or {}).get("model")
+        if task.get("route") or pinned_model:
+            suffix = ":lane=" + str(task.get("route") or task["agent"]) + (":" + str(pinned_model) if pinned_model else "")
+            if suffix not in task["session_key"]:
+                task["session_key"] += suffix
     # Pinned choices do not resume a session created for a different pair.
     # Keep legacy session keys unchanged when effort is inherited.
     if task["agent"] in {"codex", "claude", "agy", "opencode"}:
