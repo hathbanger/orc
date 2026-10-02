@@ -413,6 +413,12 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
             _validate_checks(targeted)
         if node.get("independent_of") and node["independent_of"] not in node["needs"]:
             raise ValueError("independent_of must name a direct dependency")
+        if "verification_argv" in node:
+            commands = node["verification_argv"]
+            if (not node["write"] or not isinstance(commands, list)
+                    or not all(isinstance(argv, list) and argv and all(isinstance(p, str) and p and "\x00" not in p for p in argv)
+                               for argv in commands)):
+                raise ValueError(f"workflow node {node['id']} verification_argv must be a list of argv lists on a write node")
 
     acceptance = spec.get("acceptance") or {}
     if not isinstance(acceptance, dict):
@@ -1475,6 +1481,13 @@ BLOCKERS: unresolved issues, or none
             task["task"] += ("\nAfter you finish, the coordinator runs these checks: "
                              + "; ".join(shlex.join(check) for check in task["verification_argv"])
                              + ". You may run exactly these commands yourself.")
+        if node.get("verification_argv"):
+            # Authored commands the worker may run itself (the gym's decomp
+            # checker); the coordinator does not run them.
+            authored = [list(argv) for argv in node["verification_argv"]]
+            task["verification_argv"] = [*(task.get("verification_argv") or []), *authored]
+            task["task"] += ("\nYou may run exactly these commands yourself: "
+                             + "; ".join(shlex.join(argv) for argv in authored) + ".")
         store = self.store
         task["progress_label"] = node_id
         task["node_task"] = node["task"]

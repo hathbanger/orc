@@ -1035,7 +1035,7 @@ def grade_label(gym, row):
 
 
 def run(tasks_path, lanes, gym, max_tasks=None, budget_usd=None, keep_worktrees=False, runner=None, mode="hidden",
-        kind="fix"):
+        kind="fix", decomp=None):
     """Sequential task x lane runs; resumable (completed pairs are skipped).
     Results are keyed by task, lane, mode and kind, so a visible run never
     stands in for a hidden one, nor a localization for a fix.
@@ -1043,7 +1043,16 @@ def run(tasks_path, lanes, gym, max_tasks=None, budget_usd=None, keep_worktrees=
     kind "localize" runs the read-only localization task on B in mode
     hidden only: interface hints name the symbols the answer is graded on,
     and visible tests point at the files. Tasks whose fix changed no source
-    file that exists in B cannot be localized from B and are skipped."""
+    file that exists in B cannot be localized from B and are skipped.
+
+    kind "decomp" runs tenet.decomp-task.v1 tasks (fusion_gym_decomp.run),
+    always in mode hidden; `decomp` holds its options (grader, binary,
+    image, repo_path, timeout)."""
+    if kind == "decomp":
+        if mode != "hidden":
+            raise ValueError("decomp runs are always mode hidden")
+        from fusion_gym_decomp import run as run_decomp
+        return run_decomp(tasks_path, lanes, gym, max_tasks, budget_usd, keep_worktrees, runner, **(decomp or {}))
     import fusion_core as core
     from fusion_gym_localize import gradeable
     from fusion_publish import snapshot
@@ -1565,9 +1574,12 @@ def report(gym):
     for row in read_results(gym):
         if row.get("event") == "finished":
             latest[row["key"]] = row
-    modes, localized, interpreted = {}, [], []
+    modes, localized, interpreted, decomp_rows = {}, [], [], []
     for row in latest.values():
         if not row.get("completed"):
+            continue
+        if row["kind"] == "decomp":
+            decomp_rows.append(row)
             continue
         if row["kind"] == "interpret":
             interpreted.append(row)
@@ -1615,7 +1627,45 @@ def report(gym):
     if interpreted:
         from fusion_gym_interpret import report_section
         value["interpret"] = report_section(interpreted)
+    if decomp_rows:
+        value["decomp"] = _decomp_section(decomp_rows)
     return {**value, "incomplete": pending}
+
+
+def _decomp_section(rows):
+    """Per lane: matched, unmatched, holds and tampered runs, cost and time, per stratum.
+    Holds measured the machine and tampered runs graded themselves: neither is a rate."""
+    lanes, tasks = {}, {}
+    for row in rows:
+        lane = lanes.setdefault(row["lane"], {"runs": 0, "attempted": 0, "matched": 0, "unmatched": 0, "holds": 0,
+                                              "tampered": 0, "cost_usd": 0.0, "duration_ms": 0, "strata": {}})
+        lane["runs"] += 1
+        verdict = row.get("verdict")
+        lane["holds"] += verdict == "hold"
+        lane["tampered"] += verdict == "tampered"
+        lane["cost_usd"] += row.get("cost_usd") or 0
+        lane["duration_ms"] += row.get("duration_ms") or 0
+        if verdict in ("matched", "unmatched"):
+            lane["attempted"] += 1
+            lane[verdict] += 1
+            stratum = lane["strata"].setdefault(str(row.get("stratum")), {"matched": 0, "attempted": 0})
+            stratum["attempted"] += 1
+            stratum["matched"] += verdict == "matched"
+        task = tasks.setdefault(row["task"], {"matched_by": [], "attempted_by": []})
+        task["attempted_by"].append(row["lane"])
+        if verdict == "matched":
+            task["matched_by"].append(row["lane"])
+    for lane in lanes.values():
+        n = lane["attempted"]
+        lane["match_rate"] = round(lane["matched"] / n, 3) if n else None
+        lane["cost_per_match"] = round(lane["cost_usd"] / lane["matched"], 4) if lane["matched"] else None
+        lane["mean_duration_s"] = round(lane["duration_ms"] / lane["runs"] / 1000, 1)
+        lane["cost_usd"] = round(lane["cost_usd"], 4)
+        lane["strata"] = dict(sorted(lane["strata"].items()))
+    for task in tasks.values():
+        task["matched_by"].sort()
+        task["attempted_by"].sort()
+    return {"lanes": dict(sorted(lanes.items())), "tasks": dict(sorted(tasks.items()))}
 
 
 MODE_TITLES = {"hidden": "hidden tests (worker sees only the problem text)",
@@ -1656,6 +1706,18 @@ def table(value):
         for task_id, task in section["tasks"].items():
             lines.append(f"{task_id:<12} localized by: {', '.join(task['localized_by']) or 'none'}"
                          f"  (of {', '.join(task['attempted_by'])})")
+        lines.append("")
+    section = value.get("decomp")
+    if section:
+        lines += ["== decomp (byte-exact: the target function compiles to the original bytes; holds and tampered excluded)",
+                  f"{'lane':<22} {'graded':>6} {'match':>5} {'rate%':>5} {'holds':>5} {'tamper':>6} {'cost$':>8} {'$/match':>8} "
+                  f"{'mean s':>7}  by stratum"]
+        for name, lane in section["lanes"].items():
+            strata = " ".join(f"{k} {v['matched']}/{v['attempted']}" for k, v in lane["strata"].items())
+            per = "-" if lane["cost_per_match"] is None else f"{lane['cost_per_match']:.2f}"
+            lines.append(f"{name:<22} {lane['attempted']:>6} {lane['matched']:>5} {_percent(lane['match_rate']):>5} "
+                         f"{lane['holds']:>5} {lane['tampered']:>6} {lane['cost_usd']:>8.2f} {per:>8} "
+                         f"{lane['mean_duration_s']:>7.1f}  {strata}")
         lines.append("")
     section = value.get("interpret")
     if section:
@@ -1729,9 +1791,15 @@ def add_parser(sub):
     run_cmd.add_argument("--no-interface-hints", action="store_true",
                          help="hidden mode without the interface section (names and signatures the tests call); "
                               "results are keyed as mode hidden, hinted runs as hidden+hints")
-    run_cmd.add_argument("--kind", choices=KINDS, default="fix",
+    run_cmd.add_argument("--kind", choices=(*KINDS, "decomp"), default="fix",
                          help="fix (default): implement the fix, graded by the hidden tests; localize: read-only, "
-                              "name the files and symbols the fix changes (no hints); interpret: read-only evidence questions")
+                              "name the files and symbols the fix changes (no hints); interpret: read-only evidence questions; "
+                              "decomp: match a function byte for byte, graded by the decomp grader")
+    run_cmd.add_argument("--grader", help="decomp: grader command (default: python3 -m decomp_gym)")
+    run_cmd.add_argument("--binary", help="decomp: original binary (default: the grader reads DECOMP_GYM_BINARY)")
+    run_cmd.add_argument("--image", help="decomp: grader image reference")
+    run_cmd.add_argument("--repo-path", help="decomp: repository holding each task's base_commit (the starting tree; "
+                                             "default: start/ next to the task file)")
     report_cmd = commands.add_parser("report", help="per-lane and per-task results of a gym directory")
     report_cmd.add_argument("gym_dir")
     audit_cmd = commands.add_parser("audit", help="retract negatives from tasks no lane has solved; restore them once one does")
@@ -1806,6 +1874,24 @@ def command(args, workspace, as_json=False, out=None):
     if args.gym_command == "run":
         if args.max_tasks is not None and args.max_tasks < 1:
             raise ValueError("--max-tasks must be at least 1")
+        if args.kind == "decomp":
+            if args.visible_tests:
+                raise ValueError("--kind decomp is always mode hidden; drop --visible-tests")
+            repo = None
+            if args.repo_path:
+                repo = Path(args.repo_path if Path(args.repo_path).is_absolute() else Path(workspace) / args.repo_path)
+            result = run(args.tasks, args.lanes, args.gym_workspace, args.max_tasks, args.budget_usd,
+                         args.keep_worktrees, kind="decomp",
+                         decomp={"grader": args.grader, "binary": args.binary, "image": args.image, "repo_path": repo})
+            lines = [f"{result['status']}: {len(result['runs'])} decomp runs, ${result['spent_usd']:.2f}"]
+            lines += [f"{row['task']} on {row['lane']}: {row['verdict']}"
+                      + (f" ({row['fail_reason']})" if row.get("fail_reason") else "")
+                      + (f" tampered {', '.join(row['tampered'])}" if row.get("tampered") else "") for row in result["runs"]]
+            lines += [f"{item['task']} skipped: {item['reason']}" for item in result["skipped"]]
+            print(json.dumps(result, indent=2) if as_json else "\n".join(lines), file=out)
+            return 0
+        if any(getattr(args, name, None) for name in ("grader", "binary", "image", "repo_path")):
+            raise ValueError("--grader, --binary, --image and --repo-path apply to --kind decomp only")
         localize = args.kind in {"localize", "interpret"}
         if localize and args.visible_tests:
             raise ValueError(f"--kind {args.kind} requires hidden read-only mode; drop --visible-tests")

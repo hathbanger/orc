@@ -1117,7 +1117,8 @@ run each task on each lane in its own worktree (resumable)
 usage: fusion gym run [-h] --lanes LANES [LANES ...] --workspace GYMDIR
                       [--max-tasks MAX_TASKS] [--budget-usd BUDGET_USD]
                       [--keep-worktrees] [--visible-tests] [--no-interface-hints]
-                      [--kind {fix,localize,interpret}]
+                      [--kind {fix,localize,interpret,decomp}] [--grader GRADER]
+                      [--binary BINARY] [--image IMAGE] [--repo-path REPO_PATH]
                       tasks
 
 positional arguments:
@@ -1137,10 +1138,18 @@ options:
   --no-interface-hints    hidden mode without the interface section (names and
                           signatures the tests call); results are keyed as mode hidden,
                           hinted runs as hidden+hints
-  --kind {fix,localize,interpret}
+  --kind {fix,localize,interpret,decomp}
                           fix (default): implement the fix, graded by the hidden tests;
                           localize: read-only, name the files and symbols the fix
-                          changes (no hints); interpret: read-only evidence questions
+                          changes (no hints); interpret: read-only evidence questions;
+                          decomp: match a function byte for byte, graded by the decomp
+                          grader
+  --grader GRADER         decomp: grader command (default: python3 -m decomp_gym)
+  --binary BINARY         decomp: original binary (default: the grader reads
+                          DECOMP_GYM_BINARY)
+  --image IMAGE           decomp: grader image reference
+  --repo-path REPO_PATH   decomp: repository holding each task's base_commit (the
+                          starting tree; default: start/ next to the task file)
 ```
 
 ## fusion gym report
