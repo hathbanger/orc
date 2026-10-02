@@ -5,6 +5,7 @@ import atexit
 import contextlib
 from collections import Counter
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -15,6 +16,7 @@ import selectors
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 import time
 import uuid
 
@@ -520,28 +522,29 @@ class LayaRuntime:
                     stream.close()
         self.buffer = b""
 
-    def predict(self, state, questions, checkpoint=None):
+    def predict(self, state, questions, checkpoint=None, options=None):
+        options = options or self.options
         with self.lock:
             if self.error:
                 raise RuntimeError(self.error)
             try:
                 if self.process is None:
-                    progress.emit("laya", f"starting local runtime on {self.options['device']}; the first checkpoint load may take tens of seconds")
+                    progress.emit("laya", f"starting local runtime on {options['device']}; the first checkpoint load may take tens of seconds")
                     env = os.environ.copy()
                     env.update(HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
                     self.process = subprocess.Popen(
                         [runtime_python(self.options), "-u", str(Path(__file__).with_name("fusion_laya.py")), "serve"],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
                     )
-                request = {"state": state, "questions": questions, "device": self.options["device"],
-                           "model_path": self.options["model_path"]}
+                request = {"state": state, "questions": questions, "device": options["device"],
+                           "model_path": options["model_path"]}
                 if checkpoint in CHECKPOINTS:
                     request.update(checkpoint=checkpoint, model_path="")
                 elif checkpoint:
                     request["model_path"] = checkpoint
                 self.process.stdin.write((json.dumps(request, ensure_ascii=False) + "\n").encode())
                 self.process.stdin.flush()
-                deadline = time.monotonic() + float(self.options["timeout_seconds"])
+                deadline = time.monotonic() + float(options["timeout_seconds"])
                 with selectors.DefaultSelector() as selector:
                     selector.register(self.process.stdout, selectors.EVENT_READ)
                     while b"\n" not in self.buffer:
@@ -574,15 +577,17 @@ _runtime_lock = threading.Lock()
 
 
 def runtime_for(options):
-    key = digest(options)
+    """One resident process per interpreter; device, checkpoint and timeout travel with each request."""
+    python = runtime_python(options)
     with _runtime_lock:
-        if key not in _runtimes:
+        if python not in _runtimes:
             for stale in _runtimes.values():
                 with stale.lock:
                     stale.close()
             _runtimes.clear()
-            _runtimes[key] = LayaRuntime(options)
-        return _runtimes[key]
+            _runtimes[python] = LayaRuntime({**options, "python": python})
+        runtime = _runtimes[python]
+    return SimpleNamespace(predict=functools.partial(runtime.predict, options=options))
 
 
 @atexit.register
