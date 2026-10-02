@@ -95,12 +95,12 @@ class WriteTrialsTest(unittest.TestCase):
                                       'write': {'attempts': 12, 'successes': 12}}}}))
         self.config['decisions'].update(priors={}, write_trials=['fable'])
         self.checked('opus', 3)
-        task = core.make_task(self.root, 'auto', 'fixture', 'implementation', [], [], None, False, True)
-        fable = next(c for c in policy.route_candidates(self.config, task, self.store) if c['route'] == 'fable')
+        self.assertEqual(self.route()['route'], 'fable')
+        row = self.last_log()
+        fable = next(c for c in row['candidates'] if c['route'] == 'fable')
         self.assertEqual(fable['checked_runs_local'], 0)
         self.assertGreaterEqual(fable['checked_runs'], 3)
-        self.assertEqual(self.route()['route'], 'fable')
-        self.assertEqual(self.last_log()['write_trial'], {'route': 'fable', 'checked_runs': 0, 'minimum': 3})
+        self.assertEqual(row['write_trial'], {'route': 'fable', 'checked_runs': 0, 'minimum': 3})
 
     def test_a_review_is_gating_work_and_takes_a_trial(self):
         self.config['decisions']['write_trials'] = ['fable']
