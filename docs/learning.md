@@ -281,7 +281,11 @@ lane in its own worktree and lets the gate label the result, and `gym report`
 compares lanes on the same tasks. By default the tests are hidden: the worker
 starts from the parent commit with only the problem text, and the PR's tests
 are written in only while the gate runs them (`--visible-tests` for the old
-mode). `gym run` calls paid models. See
+mode). Because those fixtures overwrite their files for every check, a worker
+that only *adds* a new test to such a file (the natural place for it) is graded
+normally; deleting or changing existing lines there, or defining a test the
+checks run, still marks the run `tampered`. Rows recorded before this rule are
+regraded when read. `gym run` calls paid models. See
 [ORC gym](../FUSION_DECISIONS.md#orc-gym-replayed-fixes-as-benchmark-tasks).
 
 
