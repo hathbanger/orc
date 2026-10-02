@@ -190,6 +190,9 @@ class DecompCliTest(unittest.TestCase):
         path = Path(gym.write_priors(value, self.root / "priors.json"))
         index = policy.load_priors({"path": str(path), "weight": .5, "cap": 10})
         self.assertIn(("claude", "claude-opus-5-5", "high"), index["lane"])
+        merged = gym.merge_priors([(value, 1.0, "a"), (value, .5, "b")])
+        cell = merged["priors"]["claude:claude-opus-5-5:high"]["decomp:S1"]
+        self.assertEqual((cell["attempts"], cell["successes"]), (3.0, 1.5))
 
     def test_extract_runs_the_graders_extractor_and_checks_its_tasks(self):
         out = self.root / "extracted"

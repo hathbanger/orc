@@ -1354,7 +1354,7 @@ def merge_priors(inputs, renames=None, now=None):
             into = merged.setdefault(key, {"agent": agent, "route": None, "model": model, "reasoning_effort": effort,
                                            "gym_lanes": []})
             into["gym_lanes"] = sorted(set(into["gym_lanes"]) | set(entry.get("gym_lanes") or []))
-            for work in sorted(set(WORK_CLASSES.values())):
+            for work in work_classes(entry):
                 stats = entry.get(work)
                 if not stats or not stats.get("attempts") or not weight:
                     continue
