@@ -105,6 +105,21 @@ or route. Unset, every configured lane is a candidate.
 {"decisions": {"auto_routes": ["claude-opus-medium", "claude-opus-high", "codex-astra-medium", "codex-astra-high"]}}
 ```
 
+`decisions.write_trials` lists configured route names that may take work that
+ships or gates (a writer or a review) before they have evidence for it. Gating
+work never explores, so without it a new lane never gets its first write while
+a proven lane survives. While a listed lane survives the automatic filters and
+has fewer checked runs than the `decisions.rank_by_outcomes` minimum (default
+`3`), it takes the pick ahead of the ranked order; at the minimum it ranks on
+its evidence. Lanes not listed are never promoted, overflow lanes stay out
+while a primary survives, and a qualified Laya recommendation still wins. It
+must be a list of route names; anything else is an error. See
+[write trials](routing.md#write-trials).
+
+```json
+{"decisions": {"auto_routes": ["claude-opus-high", "claude-fable-high"], "write_trials": ["claude-fable-high"]}}
+```
+
 An agent or route may declare capabilities it `lacks`, as a list of names. A
 task that `--needs` one of them (CLI `fusion delegate --needs local_server`,
 MCP `needs`) skips that lane during automatic routing, with the reason
