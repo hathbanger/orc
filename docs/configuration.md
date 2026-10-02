@@ -310,6 +310,22 @@ cost with `timeout_seconds` and the workflow's `budget_usd`. OpenRouter models
 are not in the `agy` host list — route those through the `orc` path instead.
 `agy` is not (yet) a lead candidate; `fusion lead` accepts Claude, Codex or OpenCode.
 
+## Declared prices
+
+Some providers report token counts but no cost: gateway-only or self-hosted models, and
+OpenCode models it has no price for. Their runs record cost as unknown. An agent or route may
+declare `price_per_mtok` (USD per million tokens). When a worker reports tokens but no cost,
+the run's `usage.cost_usd` is computed from those prices and marked `cost_estimated: true`;
+a cost the worker reports always wins. Tokens of a kind the table does not price leave the
+cost unknown, and a lane with no table is unchanged.
+
+```json
+{"routes": {"oc-kimi": {"agent": "opencode", "model": "gateway/kimi-k2.6",
+                        "price_per_mtok": {"input": 0.95, "output": 4.0, "cache_read": 0.095}}}}
+```
+
+Keys are `input`, `output` (reasoning tokens count as output), `cache_read` and `cache_write`.
+
 ## OpenCode settings
 
 [OpenCode](https://opencode.ai) (`opencode run --format json`) is a fifth worker
