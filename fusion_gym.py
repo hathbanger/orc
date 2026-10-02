@@ -724,8 +724,75 @@ def read_results(gym):
                     row["key"] += ":visible"
             if isinstance(row, dict):
                 row.setdefault("kind", "fix")
+                _regrade_hidden_fixture_edits(row)
             rows.append(row)
     return rows
+
+
+def check_test_names(task):
+    """Test function names the task's checks run (unittest ids, pytest node ids)."""
+    names = set()
+    for argv in (task.get("checks") or {}).get("fail_to_pass", []) + (task.get("checks") or {}).get("pass_to_pass", []):
+        for arg in argv:
+            name = re.split(r"\.|::", str(arg).lstrip("*"))[-1]
+            if re.fullmatch(r"test_\w+|test[A-Z0-9]\w*", name):
+                names.add(name)
+    return names
+
+
+def _file_edit(patch_text, path, test_names):
+    """How a unified diff changes one file: deleted lines and checked test names
+    it defines. None when the file is not in the diff (or is binary)."""
+    edit, inside = None, False
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git "):
+            inside = line.endswith(" b/" + path)
+            if inside:
+                edit = {"deleted": 0, "defines": []}
+        elif not inside or edit is None:
+            continue
+        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+            return None
+        elif line.startswith("-") and not line.startswith("--- "):
+            edit["deleted"] += 1
+        elif line.startswith("+") and not line.startswith("+++ "):
+            match = re.match(r"\+\s*(?:async\s+)?def\s+(test\w+)\s*\(", line)
+            if match and match.group(1) in test_names:
+                edit["defines"].append(match.group(1))
+    return edit
+
+
+def _benign_addition(edit):
+    return isinstance(edit, dict) and edit.get("deleted") == 0 and not edit.get("defines")
+
+
+def _regrade_hidden_fixture_edits(row):
+    """Rows recorded before additions to hidden test files were exempt read as
+    they would be graded now: a hidden-mode fix whose only "tampering" was
+    adding to a file the hidden fixtures overwrite is graded on its checks.
+    Without the saved patch nothing changes."""
+    if (row.get("kind") != "fix" or row.get("mode") not in HIDDEN_MODES or row.get("verdict") != "tampered"
+            or not row.get("baseline_ok")):
+        return
+    hidden = set(row.get("touched_fixtures") or [])
+    if not hidden or not set(row.get("tampered") or []) <= hidden:
+        return
+    try:
+        patch_text = Path(row.get("patch") or "").read_text(errors="replace") if row.get("patch") else ""
+    except OSError:
+        return
+    names = set(row.get("check_test_names") or [])
+    if not patch_text or not all(_benign_addition(_file_edit(patch_text, path, names)) for path in hidden):
+        return
+    if not names and not row.get("f2p_passed"):
+        # Rows recorded before check_test_names cannot rule out a forged
+        # stand-in; regrade them only when the fixture's own tests passed.
+        return
+    row["check_inputs_changed"] = sorted(set(row.get("check_inputs_changed") or []) - hidden)
+    row["tampered"] = []
+    row["regraded"] = "hidden_fixture_edit"
+    row["verdict"] = ("solved" if row.get("f2p_passed") and not row.get("p2p_regressed")
+                      else "regressed" if row.get("f2p_passed") else "unsolved")
 
 
 def _append(gym, row):
@@ -835,7 +902,7 @@ def withdraw_untrusted_label(gym, row):
     return {**label, "status": "retracted", "reason": f"gym verdict {row['verdict']}"}
 
 
-def summarize(task, lane_name, lane, outcome, diff_files, wall_ms, mode="visible"):
+def summarize(task, lane_name, lane, outcome, diff_files, wall_ms, mode="visible", fixture_edits=None):
     node = (outcome.get("nodes") or [{}])[0]
     result = node.get("result") or {}
     receipts = result.get("acceptance_checks") or []
@@ -856,9 +923,18 @@ def summarize(task, lane_name, lane, outcome, diff_files, wall_ms, mode="visible
         touched_fixtures = sorted(path for path in diff_files if path in hidden_paths)
         worker_tests = sorted(path for path in diff_files if is_test_path(path) and path not in hidden_paths)
         tampered = []
+        # The same overwrite makes a worker's edit to a hidden path inert as a
+        # check input too. Only adding a new test next to the existing ones is
+        # ordinary work the worker cannot know to avoid. Deleting or changing
+        # existing lines, or defining a test the task's checks run (a forged
+        # stand-in), still excludes the evidence.
+        edits = fixture_edits or {}
+        added_only = {path for path in hidden_paths if path in diff_files and _benign_addition(edits.get(path))}
+        check_inputs_changed = sorted(set(result.get("check_inputs_changed") or []) - added_only)
     else:
         tampered = sorted(path for path in diff_files if is_test_path(path))
-    tampered = sorted(set(tampered) | set(result.get("check_inputs_changed") or []))
+        check_inputs_changed = sorted(result.get("check_inputs_changed") or [])
+    tampered = sorted(set(tampered) | set(check_inputs_changed))
     dispatched = bool(result.get("run_id"))
     status = outcome.get("status")
     if not dispatched or status in {"paused_quota", "paused_budget", "interrupted"}:
@@ -882,7 +958,8 @@ def summarize(task, lane_name, lane, outcome, diff_files, wall_ms, mode="visible
             "workflow_id": outcome.get("workflow_id"), "status": status,
             "verdict": verdict, "completed": completed, "f2p_passed": f2p_passed, "p2p_regressed": p2p_regressed,
             "baseline_ok": baseline_ok, "tampered": tampered, "changed": diff_files,
-            "check_inputs_changed": result.get("check_inputs_changed", []),
+            "check_inputs_changed": check_inputs_changed,
+            **({"check_test_names": sorted(check_test_names(task))} if mode in HIDDEN_MODES else {}),
             **({"touched_fixtures": touched_fixtures, "worker_tests": worker_tests} if mode in HIDDEN_MODES else {}),
             "worker": {"status": result.get("status"), "agent": result.get("agent"), "route": result.get("route"),
                        "model": result.get("model"), "run_id": result.get("run_id")},
@@ -1091,7 +1168,11 @@ def run(tasks_path, lanes, gym, max_tasks=None, budget_usd=None, keep_worktrees=
                         (evidence / f"{workflow_id}.answer.md").write_text(answer, encoding="utf-8")
                         row["answer_file"] = str(evidence / f"{workflow_id}.answer.md")
                 else:
-                    row = summarize(task, name, lane, outcome, diff_files, wall_ms, task_mode)
+                    hidden_touched = [fixture["path"] for fixture in (task.get("hidden") or {}).get("fixtures", [])
+                                      if fixture["path"] in diff_files] if task_mode in HIDDEN_MODES else []
+                    fixture_edits = ({path: _file_edit(patch.decode("utf-8", "replace"), path, check_test_names(task))
+                                      for path in hidden_touched} if hidden_touched and snapshot_error is None else {})
+                    row = summarize(task, name, lane, outcome, diff_files, wall_ms, task_mode, fixture_edits)
                     if snapshot_error is not None:
                         row.update(verdict="invalid_snapshot", completed=False, snapshot_error=snapshot_error)
                     row["gate_label"] = withdraw_untrusted_label(gym, row)
