@@ -165,7 +165,7 @@ class GatingThompsonTest(unittest.TestCase):
         self.checked('fable', 2)
         self.assertEqual(self.route()['route'], 'opus')
         self.assertNotIn('sampled', self.last_log())
-        self.assertEqual(self.last_log()['policy']['gating_policy'], 'rank')
+        self.assertNotIn('gating_policy', self.last_log()['policy'])
         self.config['decisions']['gating_policy'] = 'greedy'
         with self.assertRaisesRegex(ValueError, 'gating_policy'):
             self.route()

@@ -604,7 +604,7 @@ def thompson(candidates, task, rng):
                "families": [{"agent": family[0], "model": family[1], "reasoning_effort": family[2],
                              "lead": lead["key"], **{k: (lead.get("pooled") or {}).get(k) for k in
                                                      ("successes", "attempts", "lanes", "cost_per_accepted")},
-                             "p_win": round(wins[family] / POSTERIOR_DRAWS, 4)}
+                             "p_win": wins[family] / POSTERIOR_DRAWS}
                             for family, lead in families.items()]}
     return [chosen] + [c for c in candidates if c is not chosen], sampled
 
@@ -896,7 +896,8 @@ def route_task(config, task, store, rng=None):
         engine.store.append("routing_log", **context(task), decision_id=record["id"] if record else None, scope=scope,
                             write=bool(task.get("write")),
                             **({"needs": task["needs"], "needs_unmet": needs_unmet} if task.get("needs") else {}),
-                            policy={"rank_by_outcomes": minimum, "explore": explore, "gating_policy": gating_policy(config), "warm_epsilon": warm_epsilon if ranking else None,
+                            policy={"rank_by_outcomes": minimum, "explore": explore,
+                                    **({"gating_policy": "thompson"} if sampling else {}), "warm_epsilon": warm_epsilon if ranking else None,
                                     "epsilon": effective, "routing_epsilon": epsilon, "laya_applied": applied,
                                     "priors": priors_policy(config),
                                     **({"cost_epsilon": cost_epsilon if warm_epsilon is None else max(warm_epsilon, cost_epsilon)}
