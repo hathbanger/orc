@@ -54,7 +54,7 @@ class RoutingTasksTest(unittest.TestCase):
         self.assertEqual(first["outcome"], {"accepted": True, "source": "lead", "stage": "verify", "reason": "landed"})
         self.assertEqual(first["labels"], [{"decision_id": "gate-1", "kind": "acceptance", "labeled": True, "source": "lead_verdict",
                                             "answers": {"failed_task": "false"}, "verified": True}])
-        self.assertEqual(first["run_dir"], ".fusion/runs/run-1")
+        self.assertEqual((first["run_dir"], first["result"]), (".fusion/runs/run-1", ".fusion/runs/run-1/result.json"))
 
     def test_unlabeled_unsampled_and_pending_runs_say_so(self):
         rows = {r["run"]: r for r in routing_tasks(EVENTS, SPANS)["rows"]}
@@ -72,6 +72,7 @@ class RoutingTasksTest(unittest.TestCase):
         self.assertEqual([r["run"] for r in filtered["rows"]], ["run-2"])
         self.assertEqual(list(filtered["models"]), ["model-b"])
         self.assertEqual(len(routing_tasks(EVENTS, SPANS, limit=1)["rows"]), 1)
+        self.assertIsNone(routing_tasks(EVENTS, [])["models"]["model-a"]["cost_usd"])
 
 
 class RoutingSurfacesTest(unittest.TestCase):

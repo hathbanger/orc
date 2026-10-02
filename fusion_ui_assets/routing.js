@@ -22,7 +22,7 @@ function routingRow(row) {
   const posterior = p ? `<span title="pooled local evidence across ${esc((p.lanes || []).join(", "))}">posterior ${p.successes}/${p.attempts} · ${routingPercent(p.p_win)} chance best · ${routingMoney(p.cost_per_accepted)}/accepted</span>` : "";
   const how = row.write_trial ? "write trial" : row.explored ? "explored" : p ? "sampled" : "ranked";
   return `<div class="run-row routing-row"><div><div class="run-title">${esc(row.model || row.chosen)}${row.reasoning_effort ? " · " + esc(row.reasoning_effort) : ""} <small class="mono">${esc(row.chosen)}</small></div>` +
-    `<div class="run-meta"><span>${esc(row.role || "—")}${row.write ? " · writes" : ""}</span><span>${date(row.time_ms)}</span><span>${how} · propensity ${routingPercent(row.propensity)} of ${row.candidates}</span>${posterior}<span>${routingMoney(row.cost_usd)}</span><span class="mono" title="${esc(row.run_dir)}">${esc(row.run)}</span></div>` +
+    `<div class="run-meta"><span>${esc(row.role || "—")}${row.write ? " · writes" : ""}</span><span>${date(row.time_ms)}</span><span>${how} · propensity ${routingPercent(row.propensity)} of ${row.candidates}</span>${posterior}<span>${routingMoney(row.cost_usd)}</span><button class="subtle mono" data-action="file" data-path="${esc(row.result)}" title="Open ${esc(row.result)}">${esc(row.run)}</button></div>` +
     `<div class="run-meta">${routingLabels(row.labels)}</div></div><div class="run-side">${routingOutcome(row.outcome)}${row.status ? badge(row.status) : ""}</div></div>`;
 }
 function routingView() {
