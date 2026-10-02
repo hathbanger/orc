@@ -1209,7 +1209,34 @@ WORK_CLASSES = {"fix": "write", "localize": "read", "interpret": "interpret"}
 # that returns no usable answer failed the read-only task it was routed.
 PRIOR_VERDICTS = {"interpret": ({"correct"}, {"misread", "invalid_answer", "abstained"}),
                  "fix": ({"solved"}, {"unsolved", "regressed"}),
-                  "localize": ({"localized"}, {"missed", "invalid_answer"})}
+                  "localize": ({"localized"}, {"missed", "invalid_answer"}),
+                  "decomp": ({"matched"}, {"unmatched"})}
+
+
+def work_class_of(row):
+    """A decomp row's class is per stratum (`decomp:<stratum>`); other kinds
+    map through WORK_CLASSES."""
+    if row["kind"] == "decomp":
+        from fusion_gym_decomp import work_class
+        return work_class(row)
+    return WORK_CLASSES[row["kind"]]
+
+
+def work_classes(entry):
+    """The work classes an exported priors entry carries, in a stable order."""
+    known = list(WORK_CLASSES.values())
+    return known + sorted(key for key, value in entry.items()
+                          if key not in known and isinstance(value, dict) and "attempts" in value)
+
+
+def _latest_decomp(gym):
+    """The latest decomp row per key. Holds are kept here and excluded by
+    their verdict, so a hold after a graded run replaces it as the latest."""
+    latest = {}
+    for row in read_results(gym):
+        if row.get("event") == "finished" and row.get("kind") == "decomp" and row.get("completed"):
+            latest[row["key"]] = row
+    return latest
 
 
 def default_priors_path():
@@ -1241,11 +1268,12 @@ def lane_priors(gym, now=None):
     solved = _solved(latest)
     generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now if now is not None else time.time()))
     priors, excluded, unsolvable = {}, {}, {}
-    for row in sorted(latest.values(), key=lambda r: r["key"]):
+    for row in sorted([*latest.values(), *_latest_decomp(gym).values()], key=lambda r: r["key"]):
         kind, verdict = row["kind"], row.get("verdict")
         wins, losses = PRIOR_VERDICTS[kind]
         scope = row["mode"] if kind == "fix" else "localize"
-        if kind != "interpret" and (kind, row["mode"], row["task"]) not in solved:
+        # A decomp task's reference commit is its proof that it can be matched.
+        if kind not in {"interpret", "decomp"} and (kind, row["mode"], row["task"]) not in solved:
             unsolvable.setdefault(scope, set()).add(row["task"])
             excluded["unsolved_by_all"] = excluded.get("unsolved_by_all", 0) + 1
             continue
@@ -1264,7 +1292,7 @@ def lane_priors(gym, now=None):
                                                           "reasoning_effort": effort, "gym_lanes": []})
         if row["lane"] not in entry["gym_lanes"]:
             entry["gym_lanes"].append(row["lane"])
-        stats = entry.setdefault(WORK_CLASSES[kind], {"attempts": 0, "successes": 0, "_cost": 0.0, "_ms": 0})
+        stats = entry.setdefault(work_class_of(row), {"attempts": 0, "successes": 0, "_cost": 0.0, "_ms": 0})
         attempts, successes = 1, int(verdict in wins)
         if kind == "interpret":
             # Holdout scores are evaluation-only. Training questions supply
@@ -1281,7 +1309,7 @@ def lane_priors(gym, now=None):
         stats["_ms"] += int(row.get("duration_ms") or 0) * attempts
     for entry in priors.values():
         entry["gym_lanes"].sort()
-        for work in WORK_CLASSES.values():
+        for work in work_classes(entry):
             stats = entry.get(work)
             if stats:
                 cost, ms = stats.pop("_cost"), stats.pop("_ms")
@@ -1291,7 +1319,8 @@ def lane_priors(gym, now=None):
     return {"schema": PRIORS_SCHEMA, "source": "gym", "gym": str(Path(gym).resolve()), "generated_at": generated_at,
             "counted": {"write": "completed hidden and hidden+hints fix runs: solved vs unsolved/regressed",
                         "read": "completed localize runs: localized vs missed/invalid_answer",
-                        "interpret": "train questions: correct accepted, misread/invalid rejected, abstain half rejection; holdout excluded"},
+                        "interpret": "train questions: correct accepted, misread/invalid rejected, abstain half rejection; holdout excluded",
+                        "decomp:<stratum>": "graded decomp runs per stratum: matched vs unmatched; holds excluded"},
             "excluded": dict(sorted(excluded.items())),
             "unsolved_by_all": {scope: sorted(tasks) for scope, tasks in sorted(unsolvable.items())},
             "priors": dict(sorted(priors.items()))}
@@ -1390,7 +1419,7 @@ def write_priors(value, path):
 def priors_table(value):
     lines = [f"{'key':<60} {'class':<5} {'n':>3} {'ok':>3} {'rate':>5} {'cost$':>7} {'mean s':>7}"]
     for key, entry in value["priors"].items():
-        for work in WORK_CLASSES.values():
+        for work in work_classes(entry):
             stats = entry.get(work)
             if stats:
                 lines.append(f"{key:<60} {work:<5} {stats['attempts']:>3} {stats['successes']:>3} "
@@ -1576,7 +1605,8 @@ def add_parser(sub):
     extract_cmd = commands.add_parser("extract", help="turn squash-merged fix PRs into tasks with FAIL_TO_PASS tests")
     extract_cmd.add_argument("--repo-path", default=".", help="source repository (default: current directory)")
     extract_cmd.add_argument("--prs", type=int, nargs="+")
-    extract_cmd.add_argument("--kind", choices=("fix", "interpret"), default="fix")
+    extract_cmd.add_argument("--kind", choices=("fix", "interpret", "decomp"), default="fix")
+    extract_cmd.add_argument("--commits", nargs="+", help="decomp: commits that each match one function")
     seed_cmd = commands.add_parser("interpret-seed", help="build read-only evidence tasks from existing gym fix tasks")
     seed_cmd.add_argument("--out", required=True, help="directory for generated interpret tasks")
     for cmd in (extract_cmd, seed_cmd):
@@ -1591,6 +1621,20 @@ def add_parser(sub):
     extract_cmd.add_argument("--no-gh", action="store_true", help="prompt from the commit subject; no GitHub reads")
     extract_cmd.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds per test run")
     extract_cmd.add_argument("--p2p-limit", type=int, default=DEFAULT_P2P_LIMIT)
+    grade_cmd = commands.add_parser("decomp-grade", help="grade one decomp candidate for a lane and record the outcome")
+    grade_cmd.add_argument("gym_dir")
+    grade_cmd.add_argument("--task", required=True, help="tenet.decomp-task.v1 file, in its own directory")
+    grade_cmd.add_argument("--candidate", required=True, help="the whole source tree the grader compiles")
+    grade_cmd.add_argument("--lane", required=True, help="the lane that produced the candidate")
+    grade_cmd.add_argument("--out", help="grader output directory (default: under the gym's results/)")
+    grade_cmd.add_argument("--binary", help="original binary (default: the grader reads DECOMP_GYM_BINARY)")
+    grade_cmd.add_argument("--image", help="grader image reference")
+    grade_cmd.add_argument("--cost-usd", type=float)
+    grade_cmd.add_argument("--tokens-in", type=int)
+    grade_cmd.add_argument("--tokens-out", type=int)
+    grade_cmd.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds before the grade is abandoned")
+    for cmd in (extract_cmd, grade_cmd):
+        cmd.add_argument("--grader", help="decomp grader command (default: python3 -m decomp_gym)")
     run_cmd = commands.add_parser("run", help="run each task on each lane in its own worktree (resumable)")
     run_cmd.add_argument("tasks", help="task JSON file or directory from `gym extract`")
     run_cmd.add_argument("--lanes", nargs="+", required=True)
@@ -1640,6 +1684,37 @@ def command(args, workspace, as_json=False, out=None):
         summary, _ = extract_interpret(args.tasks, args.out, args.seed, args.period, args.trap_templates, args.split)
         print(json.dumps(summary, indent=2), file=out)
         return 0
+    if args.gym_command == "extract" and args.kind == "decomp":
+        from fusion_gym_decomp import extract as extract_decomp
+        if not args.commits or not args.out:
+            raise ValueError("decomp extraction requires --commits and --out")
+        repo = Path(args.repo_path if Path(args.repo_path).is_absolute() else Path(workspace) / args.repo_path)
+        summary = extract_decomp(repo, args.commits, args.out, args.grader)
+        print(json.dumps(summary, indent=2) if as_json else
+              f"{len(summary.get('tasks') or [])} decomp tasks, {len(summary.get('skipped') or [])} skipped -> {args.out}",
+              file=out)
+        return 0 if summary.get("tasks") else 1
+    if args.gym_command == "decomp-grade":
+        import fusion_core as core
+        import fusion_gym_decomp as decomp
+        gym = Path(args.gym_dir)
+        gym.mkdir(parents=True, exist_ok=True)
+        if not Path(args.task).is_file():
+            raise ValueError(f"--task must be one {decomp.TASK_SCHEMA} file")
+        [(task_path, task)] = decomp.load_tasks(args.task)
+        config, _ = core.load_config(gym)
+        lane = resolve_lane(config, args.lane)
+        key = result_key(task["task_id"], args.lane, "hidden", decomp.KIND)
+        grader_out = Path(args.out) if args.out else gym / "results" / _slug(task["task_id"]) / decomp.KIND / _slug(args.lane)
+        grader_out.mkdir(parents=True, exist_ok=True)
+        with _locked(gym):
+            row = decomp.grade(task_path, task, args.candidate, grader_out, args.lane, lane, key, args.grader,
+                               args.binary, args.image, args.cost_usd, args.tokens_in, args.tokens_out, args.timeout)
+            _append(gym, row)
+        print(json.dumps(row, indent=2) if as_json else
+              f"{row['verdict']}: {task['task_id']} ({task['stratum']}) on {args.lane}"
+              + (f" ({row['fail_reason']})" if row["fail_reason"] else ""), file=out)
+        return {"matched": 0, "unmatched": 1, "hold": 3}[row["verdict"]]
     if args.gym_command == "extract":
         if not args.prs:
             raise ValueError("fix extraction requires --prs")
