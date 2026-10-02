@@ -92,6 +92,24 @@ the effective `cost_epsilon` when cost ranking applies. `fusion decisions
 routing-report` includes `routing_policies` with each decision's policy and
 candidate cost tiers, even before an outcome exists.
 
+### Write trials
+
+A writer or a review never explores: once any lane has `minimum` checked runs,
+the unproven lanes rank below it, so a newly admitted lane never earns write
+evidence. Routes listed in `decisions.write_trials` are the exception. During
+automatic routing of gating work, a listed lane that survived every filter
+with fewer than `minimum` local checked runs moves to the top after ranking
+(fewest first, then candidate order) and takes the pick. Gym prior
+pseudo-attempts do not count toward a trial: priors are measured elsewhere, and
+the trial exists to earn evidence on this machine's own work. When the lane has
+`minimum` local checked runs it ranks on its evidence (priors included) like
+every other lane, so the trial ends by itself. Unlisted lanes are never promoted; overflow lanes are already removed
+while a primary lane survives; a qualified Laya recommendation still wins;
+pinned routes are unaffected. A review that prefers a different agent does
+not promote a lane on the implementer's agent. The routing log row records
+`write_trial` (`route`, `checked_runs` local, `minimum`) with propensity 1.0 for the
+chosen lane, and the applied reason names the write trial.
+
 ### Automatic pool
 
 `decisions.auto_routes` bounds automatic routing to the named lanes before any
@@ -264,6 +282,16 @@ Read-only roles containing `interpret` use the gym's `interpret` prior when
 present for that lane, otherwise `read`. Roles containing `locate` or `localize`
 use `read`; writing tasks always use `write`. Other roles keep their existing
 work class. The selected class is recorded in each candidate's `prior.class`.
+
+`fusion gym priors-merge FILE[@WEIGHT]...` pools priors files from several
+machines into one and prints it; pass `--out PATH` to write it (routing reads
+`lane_priors.json` under ORC_HOME): per lane (agent, model, effort) and work class, weighted
+attempts and successes add up and means are attempt-weighted. Route names are
+machine-local and dropped, so only lane identity and counts travel; `--rename
+FROM=TO` maps a private proxy's model ids to vendor ids first. `fusion gym
+priors-seed --map AGENT:MODEL[:EFFORT]=SLUG` writes small starting priors from a
+public leaderboard (`data/quality.json`): a few pseudo-attempts on `write` at the
+model's index / 100, so a handful of verified outcomes outweighs it.
 
 Set `decisions.priors` to `false` to disable them, or set its `path` to a different
 export. Priors do not confer permissions or bypass availability, fit or quota

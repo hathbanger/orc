@@ -59,10 +59,13 @@ after its name. Aliases and hidden subcommands are included below.
 - [fusion gym](#fusion-gym)
 - [fusion gym extract](#fusion-gym-extract)
 - [fusion gym interpret-seed](#fusion-gym-interpret-seed)
+- [fusion gym decomp-grade](#fusion-gym-decomp-grade)
 - [fusion gym run](#fusion-gym-run)
 - [fusion gym report](#fusion-gym-report)
 - [fusion gym audit](#fusion-gym-audit)
 - [fusion gym priors](#fusion-gym-priors)
+- [fusion gym priors-merge](#fusion-gym-priors-merge)
+- [fusion gym priors-seed](#fusion-gym-priors-seed)
 - [fusion quota](#fusion-quota)
 - [fusion quota probe](#fusion-quota-probe)
 - [fusion quota rates](#fusion-quota-rates)
@@ -996,17 +999,23 @@ options:
 replay merged fix PRs as benchmark tasks across lanes
 
 ```text
-usage: fusion gym [-h] {extract,interpret-seed,run,report,audit,priors} ...
+usage: fusion gym [-h]
+                  {extract,interpret-seed,decomp-grade,run,report,audit,priors,priors-merge,priors-seed} ...
 
 positional arguments:
-  {extract,interpret-seed,run,report,audit,priors}
+  {extract,interpret-seed,decomp-grade,run,report,audit,priors,priors-merge,priors-seed}
     extract               turn squash-merged fix PRs into tasks with FAIL_TO_PASS tests
     interpret-seed        build read-only evidence tasks from existing gym fix tasks
+    decomp-grade          grade one decomp candidate for a lane and record the outcome
     run                   run each task on each lane in its own worktree (resumable)
     report                per-lane and per-task results of a gym directory
     audit                 retract negatives from tasks no lane has solved; restore them
                           once one does
     priors                export per-lane, per-work-class success priors for routing
+    priors-merge          pool priors files from several machines into one (counts only,
+                          no route names)
+    priors-seed           small starting priors for lanes from a public leaderboard
+                          (data/quality.json)
 
 options:
   -h, --help              show this help message and exit
@@ -1018,17 +1027,20 @@ turn squash-merged fix PRs into tasks with FAIL_TO_PASS tests
 
 ```text
 usage: fusion gym extract [-h] [--repo-path REPO_PATH] [--prs PRS [PRS ...]]
-                          [--kind {fix,interpret}] [--tasks TASKS] [--seed SEED]
-                          [--period PERIOD] [--split {all,train,holdout}]
+                          [--kind {fix,interpret,decomp}]
+                          [--commits COMMITS [COMMITS ...]] [--tasks TASKS]
+                          [--seed SEED] [--period PERIOD] [--split {all,train,holdout}]
                           [--trap-templates TRAP_TEMPLATES] [--out OUT] [--ref REF]
                           [--github-repo GITHUB_REPO] [--no-gh] [--timeout TIMEOUT]
-                          [--p2p-limit P2P_LIMIT]
+                          [--p2p-limit P2P_LIMIT] [--grader GRADER]
 
 options:
   -h, --help              show this help message and exit
   --repo-path REPO_PATH   source repository (default: current directory)
   --prs PRS [PRS ...]
-  --kind {fix,interpret}
+  --kind {fix,interpret,decomp}
+  --commits COMMITS [COMMITS ...]
+                          decomp: commits that each match one function
   --tasks TASKS           existing fix task JSON file or directory (required for
                           interpret)
   --seed SEED             deterministic scenario seed
@@ -1043,6 +1055,7 @@ options:
   --no-gh                 prompt from the commit subject; no GitHub reads
   --timeout TIMEOUT       seconds per test run
   --p2p-limit P2P_LIMIT
+  --grader GRADER         decomp grader command (default: python3 -m decomp_gym)
 ```
 
 ## fusion gym interpret-seed
@@ -1064,6 +1077,36 @@ options:
   --split {all,train,holdout}
   --trap-templates TRAP_TEMPLATES
                           trap template JSON (default: gym/interpret_traps.json)
+```
+
+## fusion gym decomp-grade
+
+grade one decomp candidate for a lane and record the outcome
+
+```text
+usage: fusion gym decomp-grade [-h] --task TASK --candidate CANDIDATE --lane LANE
+                               [--out OUT] [--binary BINARY] [--image IMAGE]
+                               [--cost-usd COST_USD] [--tokens-in TOKENS_IN]
+                               [--tokens-out TOKENS_OUT] [--timeout TIMEOUT]
+                               [--grader GRADER]
+                               gym_dir
+
+positional arguments:
+  gym_dir
+
+options:
+  -h, --help              show this help message and exit
+  --task TASK             tenet.decomp-task.v1 file, in its own directory
+  --candidate CANDIDATE   the whole source tree the grader compiles
+  --lane LANE             the lane that produced the candidate
+  --out OUT               grader output directory (default: under the gym's results/)
+  --binary BINARY         original binary (default: the grader reads DECOMP_GYM_BINARY)
+  --image IMAGE           grader image reference
+  --cost-usd COST_USD
+  --tokens-in TOKENS_IN
+  --tokens-out TOKENS_OUT
+  --timeout TIMEOUT       seconds before the grade is abandoned
+  --grader GRADER         decomp grader command (default: python3 -m decomp_gym)
 ```
 
 ## fusion gym run
@@ -1142,6 +1185,45 @@ options:
   -h, --help  show this help message and exit
   --out OUT   where to write them (default: lane_priors.json under ORC_HOME,
               ~/.config/orc; `-` prints only)
+```
+
+## fusion gym priors-merge
+
+pool priors files from several machines into one (counts only, no route names)
+
+```text
+usage: fusion gym priors-merge [-h] [--rename FROM=TO] [--out OUT]
+                               FILE[@WEIGHT] [FILE[@WEIGHT] ...]
+
+positional arguments:
+  FILE[@WEIGHT]     priors files; append @0.5 to weight one (default 1)
+
+options:
+  -h, --help        show this help message and exit
+  --rename FROM=TO  rename a model id before pooling, e.g. a private proxy name to the
+                    vendor id (repeatable)
+  --out OUT         where to write the merged file (default `-`: print only; routing
+                    reads lane_priors.json under ORC_HOME)
+```
+
+## fusion gym priors-seed
+
+small starting priors for lanes from a public leaderboard (data/quality.json)
+
+```text
+usage: fusion gym priors-seed [-h] --map AGENT:MODEL[:EFFORT]=SLUG [--quality QUALITY]
+                              [--metric {agentic,coding,intelligence}]
+                              [--attempts ATTEMPTS] [--out OUT]
+
+options:
+  -h, --help              show this help message and exit
+  --map AGENT:MODEL[:EFFORT]=SLUG
+                          a lane and its leaderboard slug, e.g. claude:claude-
+                          opus-5-5:high=claude-opus-5 (repeatable)
+  --quality QUALITY       leaderboard file (default: the repo's data/quality.json)
+  --metric {agentic,coding,intelligence}
+  --attempts ATTEMPTS     pseudo-attempts per lane (default 4)
+  --out OUT               where to write the seed file (default `-`: print only)
 ```
 
 ## fusion quota
