@@ -159,6 +159,7 @@ DEFAULTS: dict[str, Any] = {
         "command": "opencode",
         "model": "",
         "opencode_agent": "",
+        "empty_step_limit": 5,
         "disable_mcp": [],
         "bash_allow": [],
         "permission": {},
@@ -241,6 +242,10 @@ def load_config(workspace: Path, control_workspace: Path | None = None) -> tuple
         # Controller policy must not replace worker commands or permissions.
         keys = {"routes", "decisions", "learning", "quota", "cache", "gym"}
         merged = deep_merge(merged, {key: value for key, value in parsed.items() if key in keys})
+    # `"routes": {"orc-free": null}` removes a route, including a built-in one
+    # that cannot work on a machine without its provider.
+    if isinstance(merged.get("routes"), dict):
+        merged["routes"] = {name: route for name, route in merged["routes"].items() if route is not None}
     execution_mode(merged)
     return merged, source
 
@@ -1634,7 +1639,12 @@ def parse_opencode_output(stdout: str) -> tuple[str | None, str, str | None, dic
             error = event.get("error") if isinstance(event.get("error"), dict) else {}
             data = error.get("data") if isinstance(error.get("data"), dict) else {}
             failure = str(data.get("message") or error.get("message") or error.get("name") or "OpenCode reported an error")
-    if saw_cost:
+    # OpenCode reports cost 0 for a model it has no price for, even after
+    # spending tokens. Unreported cost is unknown, not zero: a $0 receipt
+    # would make budgets and cost-ranked routing treat the lane as free.
+    spent_tokens = any(usage.get(field) for field in ("input_tokens", "output_tokens", "reasoning_output_tokens",
+                                                      "cache_read_input_tokens", "cache_creation_input_tokens"))
+    if saw_cost and (cost > 0 or not spent_tokens):
         usage["cost_usd"] = round(cost, 8)
     if not saw_event:
         return None, stdout.strip(), None, {}, None, []
@@ -1644,6 +1654,42 @@ def parse_opencode_output(stdout: str) -> tuple[str | None, str, str | None, dic
         failure = f"OpenCode stopped without a final answer (last step: {last_reason})"
     notes = [f"permission denied: {item['tool']}: {item['input_head']}" for item in opencode_denials(stdout)]
     return session_id, "".join(text).strip(), failure, usage, None, notes
+
+
+def opencode_empty_step_guard(limit: int):
+    """Stop a run whose provider keeps answering with nothing.
+
+    A gateway that reports a failure as a successful but empty stream gives
+    OpenCode a step with no tokens and finish reason "unknown"; OpenCode then
+    retries indefinitely, so the worker would otherwise run until its timeout.
+    `limit` consecutive steps with no tokens and no text or tool call abort it.
+    """
+    state = {"empty": 0, "activity": False}
+
+    def check(line: bytes) -> str | None:
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(event, dict):
+            return None
+        kind = event.get("type")
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if kind in {"text", "tool_use", "reasoning"}:
+            state["activity"] = True
+        elif kind == "step_finish":
+            tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+            cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+            spent = any(isinstance(v, (int, float)) and v for v in (tokens.get("input"), tokens.get("output"),
+                                                                     tokens.get("reasoning"), cache.get("read"), cache.get("write")))
+            state["empty"] = 0 if spent or state["activity"] else state["empty"] + 1
+            state["activity"] = False
+            if state["empty"] >= limit:
+                return (f"OpenCode received {state['empty']} empty responses in a row (no tokens, no output; last "
+                        f"finish reason {part.get('reason')!r}); the provider is likely failing silently")
+        return None
+
+    return check
 
 
 def opencode_permission(settings: dict[str, Any], task: dict[str, Any], yolo: bool) -> dict[str, Any]:
@@ -2058,7 +2104,10 @@ def agent_command(
         # The prompt is positional; `--` keeps a brief that starts with a dash
         # from being read as an option.
         argv += ["--", brief_for(task)]
-        return argv, env, {"command": command, "model": selected_model,
+        limit = settings.get("empty_step_limit", 5)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("opencode.empty_step_limit must be a non-negative integer (0 disables)")
+        return argv, env, {"command": command, "model": selected_model, "empty_step_limit": limit,
                            **({"execution_choice": choice} if choice else {})}
     if agent == "claude":
         command = settings.get("command", "claude")
@@ -2327,6 +2376,7 @@ def dispatch(
                 timeout=effective_timeout,
                 stdout_path=stdout_path, stderr_path=stderr_path, label=label,
                 plain_output=task["agent"] == "grok" and metadata.get("output_format") == "plain",
+                abort_on=opencode_empty_step_guard(metadata["empty_step_limit"]) if metadata.get("empty_step_limit") else None,
             )
         exit_code, worker_stdout = completed.returncode, completed.stdout
         if metadata.get("execution_choice"):
@@ -2395,6 +2445,9 @@ def dispatch(
         exit_code = 126
     except progress.WorkerCancelled as exc:
         summary, failure, status, exit_code = "worker interrupted", str(exc), "blocked", 130
+    except progress.WorkerAborted as exc:
+        summary, failure, status, exit_code = "worker stopped", str(exc), "error", 125
+        worker_stdout = exc.output or ""
     duration_ms = int((time.monotonic() - started) * 1000)
     progress.emit(label, f"worker {status} after {progress.elapsed(duration_ms / 1000)}; exit {exit_code}")
     denied = provider_denials(task["agent"], worker_stdout)
@@ -2892,6 +2945,8 @@ def launch_lead(workspace: Path, config: dict[str, Any], agent: str, task: str |
         handle, config_path = mcp_config_file(workspace, read_only)
         handle.close()
         argv = [command, "--mcp-config", str(config_path), "--append-system-prompt", LEAD_PROMPT]
+        if settings.get("model"):
+            argv += ["--model", settings["model"]]
         if yolo:
             argv += ["--dangerously-skip-permissions", "--settings", '{"sandbox":{"enabled":false}}']
         elif read_only and interactive:
@@ -3223,6 +3278,8 @@ def build_parser() -> argparse.ArgumentParser:
     learn_parser(sub)
     from fusion_gym import add_parser as gym_parser
     gym_parser(sub)
+    from fusion_quota import add_parser as quota_parser
+    quota_parser(sub)
     sub.add_parser("mcp-serve", help=argparse.SUPPRESS)
     return parser
 
@@ -3254,6 +3311,12 @@ def _main(args, parser) -> int:
         from fusion_usage import command as usage_command
         try:
             return usage_command(args, control_workspace)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+    if args.command == "quota":
+        from fusion_quota import run as run_quota
+        try:
+            return run_quota(args, workspace)
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
     if args.command == "ui":

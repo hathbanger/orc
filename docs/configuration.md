@@ -57,6 +57,17 @@ settings. Config-source reporting continues to identify the worker/global file.
 With no control-workspace flag or environment setting, storage and configuration
 remain worker-scoped; run receipts still include the absolute `workspace`.
 
+Setting a route to `null` removes it, including the built-in `orc-free`,
+`orc-best`, `codex-read` and `codex-write` routes, for example when there is no
+OpenRouter key on the machine. A later file can define it again:
+
+```json
+{"routes": {"orc-free": null, "orc-best": null}}
+```
+
+Ultra's default stages and `ultra --cheap-only` use `orc-free` and `orc-best`;
+set `ultra.stages` to other routes when removing them.
+
 The launcher uses a separate [`config.json` and project `.orc.json`](launcher.md#config).
 The checked-in [Fusion example](../.fusion.json.example) is a starting point, not a
 complete schema. Routes, account identity, quota thresholds and model/effort
@@ -92,6 +103,22 @@ or route. Unset, every configured lane is a candidate.
 
 ```json
 {"decisions": {"auto_routes": ["claude-opus-medium", "claude-opus-high", "codex-astra-medium", "codex-astra-high"]}}
+```
+
+`decisions.write_trials` lists configured route names that may take work that
+ships or gates (a writer or a review) before they have evidence for it. Gating
+work never explores, so without it a new lane never gets its first write while
+a proven lane survives. While a listed lane survives the automatic filters and
+has fewer local checked runs than the `decisions.rank_by_outcomes` minimum
+(default `3`; gym prior pseudo-attempts do not count), it takes the pick ahead
+of the ranked order; at the minimum it ranks on
+its evidence. Lanes not listed are never promoted, overflow lanes stay out
+while a primary survives, and a qualified Laya recommendation still wins. It
+must be a list of route names; anything else is an error. See
+[write trials](routing.md#write-trials).
+
+```json
+{"decisions": {"auto_routes": ["claude-opus-high", "claude-fable-high"], "write_trials": ["claude-fable-high"]}}
 ```
 
 An agent or route may declare capabilities it `lacks`, as a list of names. A
@@ -317,6 +344,12 @@ an agent's own permission rules over the global ones, so this keeps a user's
 default `build` agent from loosening a read-only worker. Set `opencode_agent` to
 run workers as one of your own OpenCode agents instead (the policy is applied
 to it too). `agent` is not used for this: in a route it names the Fusion harness.
+
+`empty_step_limit` (default 5; 0 disables) stops a worker after that many
+consecutive empty responses: steps with no tokens and no text or tool call. A
+provider or gateway that reports a failure as an empty successful stream would
+otherwise leave OpenCode retrying until `timeout_seconds`; the run instead ends
+as an error that names the cause.
 `disable_mcp` is a list of MCP server names to disable for this worker (sets
 `enabled: false` in `OPENCODE_CONFIG_CONTENT`). `bash_allow` is a list of
 additional Bash patterns to permit in restricted write-mode workers.

@@ -343,3 +343,41 @@ Holdout answers never supply priors. Unlike fix/localize solvability audits,
 curated factual gold does not need another lane to answer correctly before a
 misread counts against a lane. Read-only roles containing `triage` or
 `interpret` use this prior class; other readers retain the `read` class.
+
+### Decomp tasks
+
+`decomp` measures byte-exact decompilation: a lane edits a source tree until
+one function compiles to exactly the original bytes under a pinned toolchain.
+ORC compiles and diffs nothing itself. An external grader command (default
+`python3 -m decomp_gym`, `--grader` to change it) extracts tasks and grades
+candidates, and ORC records what it reports.
+
+```bash
+fusion gym extract --kind decomp --repo-path /path/to/decomp-repo --commits <sha>... --out /tmp/decomp-tasks
+fusion gym decomp-grade /tmp/decomp-gym --task /tmp/decomp-tasks/<task-dir>/task.json \
+  --candidate /path/to/worker-tree --lane claude-opus-high
+fusion gym priors /tmp/decomp-gym
+```
+
+`extract --kind decomp` runs `<grader> extract` and checks that every task it
+wrote is a `tenet.decomp-task.v1` with `task_id`, `game` and `stratum`. Beyond
+those fields a task is opaque to ORC: the grader validates the rest.
+`decomp-grade` runs `<grader> grade --task --candidate --out --json` with the
+lane, its model and any `--cost-usd`/`--tokens-in`/`--tokens-out`. The task file stays
+in its own directory, because the grader resolves paths in it relative to
+that directory. The candidate is the whole source tree. The original binary
+never passes through ORC: without `--binary`, the grader reads its own
+environment.
+
+The grader's exit code decides the row. 0 is `matched`, 1 is `unmatched`
+(`fail_reason` names what failed), and 3 is a `hold` (`infra` or `timeout`).
+A hold is recorded but never counts, because it measured the machine and not
+the lane. Exit 2 (a malformed task) has no outcome and records nothing. ORC
+refuses an outcome that contradicts its exit code or names a different task.
+`decomp-grade` exits with the grader's code.
+
+Priors are per stratum. Each lane gets a work class `decomp:<stratum>`
+(matched vs unmatched, holds excluded), and `game` and `stratum` are opaque
+strings. A task's reference commit proves that it can be matched, so unlike
+fix tasks, a decomp task needs no other lane to solve it before its failures
+count. Routing reads these classes only once a task asks for one.

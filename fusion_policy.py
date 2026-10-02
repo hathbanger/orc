@@ -492,6 +492,37 @@ def exploration(ranking, task, candidates):
     return minimum, not gating(task) or not any((c.get("checked_runs") or 0) >= minimum for c in candidates)
 
 
+def write_trials(config):
+    """`decisions.write_trials`: configured route names that may take gating
+    work before they have evidence for it."""
+    names = (config.get("decisions") or {}).get("write_trials")
+    if names is None:
+        return set()
+    if not isinstance(names, list) or not all(isinstance(name, str) and name in config.get("routes", {}) for name in names):
+        raise ValueError("decisions.write_trials must be a list of configured route names")
+    return set(names)
+
+
+def write_trial(config, task, candidates, minimum):
+    """(candidates, trial). Gating work never explores, so a lane listed in
+    `decisions.write_trials` with fewer than `minimum` local checked runs
+    (gym prior pseudo-attempts do not count) takes the
+    pick (fewest runs first, then candidate order) until it has the evidence
+    to rank like any other lane. Only listed lanes that survived every filter
+    are promoted; independence from the implementer still comes first."""
+    trials = write_trials(config)
+    if not trials or not gating(task) or not candidates:
+        return candidates, None
+    other = task.get("prefer_different_agent")
+    unproven = [c for c in candidates if c["route"] in trials and (c.get("checked_runs_local") or 0) < minimum
+                and not (other and c["agent"] == other and candidates[0]["agent"] != other)]
+    if not unproven:
+        return candidates, None
+    chosen = min(unproven, key=lambda c: c.get("checked_runs_local") or 0)
+    trial = {"route": chosen["route"], "checked_runs": chosen.get("checked_runs_local") or 0, "minimum": minimum}
+    return [chosen] + [c for c in candidates if c is not chosen], trial
+
+
 ROUTING_RNG = random.Random()
 
 
@@ -602,7 +633,8 @@ def quota_twin(config, task, store):
     which still passes every automatic check (caps, requires, its own quota)."""
     import fusion_core as core
     overflow = [name for name in (config.get("decisions") or {}).get("overflow_routes") or [] if name != task.get("route")]
-    if not overflow:
+    # A quota probe asks one account whether it is back; it must not move.
+    if not overflow or task.get("quota_probe"):
         return None
     settings = core.agent_settings(config, task)
     model, effort = settings.get("model"), settings.get("reasoning_effort")
@@ -664,7 +696,7 @@ def route_task(config, task, store, rng=None):
         warm_epsilon = cache["warm_epsilon"] if cache["configured"] else None
         cost_epsilon = config.get("decisions", {}).get("cost_epsilon", 0.05)
         within_route = False
-        minimum = explore = None
+        minimum = explore = trial = None
         needs_unmet = False
         if automatic:
             candidates = route_candidates(config, task, store, rejected=rejected, quota_audit=quota_audit)
@@ -680,6 +712,8 @@ def route_task(config, task, store, rng=None):
                     # different harness than the implementer when one is available.
                     candidates.sort(key=lambda item: item["agent"] == task["prefer_different_agent"])
             candidates = rank_by_quota(candidates)
+            candidates, trial = write_trial(config, task, candidates, minimum or (
+                int(ranking) if ranking and not isinstance(ranking, bool) else 3))
         else:
             from fusion_reasoning import pair_candidates, pair_key
             settings = core.agent_settings(config, task)
@@ -721,6 +755,8 @@ def route_task(config, task, store, rng=None):
             value = record["recommendations"]["route"]["value"]
             selected = next(c for c in candidates if c["key"] == value)
             applied = True
+    if applied or selected["route"] != (trial or {}).get("route"):
+        trial = None
     # Epsilon exploration: ordinary read-only work only, among lanes that
     # already passed every filter, never over a qualified recommendation or a
     # pinned lane, and only when the routing log that makes it useful is kept.
@@ -750,10 +786,12 @@ def route_task(config, task, store, rng=None):
                   "explicit route or pair retained; advice does not change dispatch" if not automatic else
                   "ranked by verified outcomes; advice does not change dispatch" if config.get("decisions", {}).get("rank_by_outcomes") else
                   "configured preference order; advice does not change dispatch")
+        if trial:
+            reason += f"; write trial promoted this unproven lane ({trial['checked_runs']} of {trial['minimum']} checked runs)"
         engine.applied(record, selected["key"], applied, reason + ("; epsilon exploration picked this lane" if explored else ""))
     if scope and (engine.options["mode"] != "off" or quota_audit):
         keys = [c["key"] for c in candidates]
-        chances = propensities(keys, selected["key"], 0.0 if applied else effective)
+        chances = propensities(keys, selected["key"], 0.0 if applied or trial else effective)
         engine.store.append("routing_log", **context(task), decision_id=record["id"] if record else None, scope=scope,
                             write=bool(task.get("write")),
                             **({"needs": task["needs"], "needs_unmet": needs_unmet} if task.get("needs") else {}),
@@ -765,7 +803,7 @@ def route_task(config, task, store, rng=None):
                                     **({"quota": quota_settings(config)} if quota_audit else {})},
                             **({"quota": quota_audit, "rejected": rejected} if quota_audit else {}),
                             candidates=[{**c, "propensity": chances[c["key"]]} for c in candidates],
-                            chosen=selected["key"], explored=explored)
+                            chosen=selected["key"], explored=explored, **({"write_trial": trial} if trial else {}))
 
 
 def effective_outcomes(events):
