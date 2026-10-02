@@ -44,7 +44,11 @@ def add_parser(sub):
                         help="hold out the newest workflow groups (time) or a hash of the group name; default decisions.split")
     export.add_argument("--exclude-source", action="append", default=[], metavar="SOURCE",
                         help="leave out answers approved by this source, for example lead_verdict, structural_gate, gym_grade or user_explicit; repeatable")
-    commands.add_parser("routing-report", help="per-lane acceptance from logged routing propensities (IPS, ESS); read-only")
+    routing = commands.add_parser("routing-report", help="per-lane acceptance from logged routing propensities (IPS, ESS); read-only")
+    routing.add_argument("--tasks", action="store_true",
+                         help="list each routed run instead: chosen model, propensity, posterior, cost, outcome and labels")
+    routing.add_argument("--model", help="with --tasks: only runs whose chosen lane or model contains this text")
+    routing.add_argument("--limit", type=int, default=200, help="with --tasks: newest N runs (default 200)")
     calibrate = commands.add_parser("calibrate", help="fit temperature on train; certify an acting threshold on held-out groups (Learn-then-Test)")
     calibrate.add_argument("dataset")
     calibrate.add_argument("output")
@@ -166,6 +170,10 @@ def run(args, workspace, config):
             raise ValueError("answers must be question=value pairs")
         store.label(args.id, dict(answer.split("=", 1) for answer in args.answers), args.evidence)
         payload = {"id": args.id, "labeled": True}
+    elif command == "routing-report" and getattr(args, "tasks", False):
+        import fusion_core as core
+        from fusion_routing_view import routing_tasks
+        payload = routing_tasks(read_jsonl(store.path), core.RunStore(workspace).traces(10000), args.model, args.limit)
     elif command == "routing-report":
         from fusion_policy import routing_report
         payload = routing_report(read_jsonl(store.path))
