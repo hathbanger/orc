@@ -1656,6 +1656,42 @@ def parse_opencode_output(stdout: str) -> tuple[str | None, str, str | None, dic
     return session_id, "".join(text).strip(), failure, usage, None, notes
 
 
+PRICE_FIELDS = {"input": ("input_tokens",), "output": ("output_tokens", "reasoning_output_tokens"),
+                "cache_read": ("cache_read_input_tokens", "cached_input_tokens"),
+                "cache_write": ("cache_creation_input_tokens", "cache_write_input_tokens")}
+
+
+def price_per_mtok(settings: dict[str, Any]) -> dict[str, float] | None:
+    """A route's or agent's `price_per_mtok`: USD per million tokens by kind, or None."""
+    value = settings.get("price_per_mtok")
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or not value or set(value) - set(PRICE_FIELDS)
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 for v in value.values())):
+        raise ValueError("price_per_mtok must map input, output, cache_read, cache_write to non-negative USD per 1M tokens")
+    return {key: float(price) for key, price in value.items()}
+
+
+def price_fallback(settings: dict[str, Any], usage: dict[str, Any]) -> float | None:
+    """The cost of a run whose worker reported tokens but no cost, from the lane's declared
+    prices. Reported costs always win; without prices or tokens the cost stays unknown."""
+    if usage.get("cost_usd") is not None:
+        return None
+    prices = price_per_mtok(settings)
+    if not prices:
+        return None
+    total, counted = 0.0, False
+    for kind, fields in PRICE_FIELDS.items():
+        tokens = sum(usage.get(field) or 0 for field in fields
+                     if isinstance(usage.get(field), (int, float)) and not isinstance(usage.get(field), bool))
+        if tokens:
+            if kind not in prices:
+                return None  # tokens of a kind the lane did not price: still unknown
+            total += tokens * prices[kind] / 1e6
+            counted = True
+    return round(total, 8) if counted else None
+
+
 def opencode_empty_step_guard(limit: int):
     """Stop a run whose provider keeps answering with nothing.
 
@@ -2294,6 +2330,7 @@ def dispatch(
         env["FUSION_CONTROL_WORKSPACE"] = str(store.control_workspace)
     metadata["execution_mode"] = execution_mode(config)
     resolved_settings = agent_settings(config, task)
+    price_per_mtok(resolved_settings)  # a malformed price table fails before the worker runs
     metadata["lane_key"] = lane_key(task["agent"], resolved_settings)
     # The requested effort, from the task, route or agent; null means the harness default.
     metadata["reasoning_effort"] = resolved_settings.get("reasoning_effort")
@@ -2398,6 +2435,9 @@ def dispatch(
             # count toward budgets or routing cost.
             usage["cost_estimate_usd"] = usage.pop("cost_usd")
             usage["cost_usd"] = 0.0
+        estimated = price_fallback(resolved_settings, usage)
+        if estimated is not None:
+            usage["cost_usd"], usage["cost_estimated"] = estimated, True
         if metadata.get("execution_choice") and event_model:
             metadata["execution_choice"]["observed"] = {
                 "model": event_model, "reasoning_effort": None, "status": "model_reported",
