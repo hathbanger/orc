@@ -412,6 +412,10 @@ class ControlRoom:
             results.append(job)
         return sorted(results, key=lambda row: row.get("started_at_ms", 0), reverse=True)[:limit]
 
+    def routing_tasks(self, workspace, model=None, limit=200):
+        from fusion_routing_view import routing_tasks
+        return routing_tasks(read_jsonl(DecisionStore(workspace).path), core.RunStore(workspace).traces(10000), model, limit)
+
     def decisions(self, workspace):
         rows = decision_rows(workspace)
         jobs = self.jobs(workspace, limit=None)
@@ -892,6 +896,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = app.config(workspace)
             elif path == "/api/decisions":
                 result = app.decisions(workspace)
+            elif path == "/api/routing-tasks":
+                result = app.routing_tasks(workspace, query.get("model"), int(query.get("limit") or 200))
             elif path == "/api/file":
                 file = inside(workspace, query.get("path", ""))
                 relative = file.relative_to(workspace)

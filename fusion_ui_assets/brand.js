@@ -25,7 +25,7 @@
   function icon(name, extra = "") {
     return `<svg class="sigil ${extra}" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${shapes[name] || shapes.spark}</svg>`;
   }
-  const chapters = {overview:"orc", workflows:"forge", workflow:"forge", truffle:"truffle", decisions:"rune", models:"library", settings:"gear"};
+  const chapters = {overview:"orc", workflows:"forge", workflow:"forge", truffle:"truffle", routing:"compass", decisions:"rune", models:"library", settings:"gear"};
   function hero() {
     return `<section class="guild-hero"><div class="guild-hero-copy"><div class="eyebrow">${icon("forge")} THE ORC GUILD · YOUR AGENT WORKSPACE</div><h1>Good work.<br>Forged here.</h1><p>Your agents bring the muscle. You set the mission.<br>Explore, build and review—with the evidence in view.</p><button class="subtle guild-guide-link" data-action="guild-guide">Meet the guild ${icon("scroll")} <span aria-hidden="true">↗</span></button></div><div class="guild-hero-art" aria-hidden="true"><div class="rune-ring"></div><img src="/brand/forge-companions.png" width="1536" height="1024" alt="" decoding="async"><span class="forge-spark spark-one">✦</span><span class="forge-spark spark-two">✧</span><span class="guild-art-caption">SMALL DIFFS. STRONG EVIDENCE.</span></div></section>`;
   }
