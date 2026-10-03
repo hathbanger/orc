@@ -211,7 +211,7 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(candidates['A']['quota']['classification'], 'tight')
 
     def test_invalid_window_numbers_are_unknown(self):
-        for value in [True, -.1, 1.1, float('nan'), float('inf'), '0.9', None]:
+        for value in [True, -.1, float('nan'), float('inf'), '0.9', None]:
             with self.subTest(value=value):
                 self.assertIsNone(usage.normalize_quota('claude', {'unifiedWindows': {
                     'five_hour': {'utilization': value, 'resetsAt': 'invalid'}}}))
@@ -251,6 +251,28 @@ class QuotaTest(unittest.TestCase):
         observation = {'lane_key': 'claude@A', 'quota': quota}
         self.assertEqual(policy.quota_assessment(observation, thresholds, NOW)['classification'], 'exhausted')
         self.assertEqual(policy.quota_assessment(observation, thresholds, NOW + 61)['classification'], 'available')
+
+    def test_a_rejection_past_its_windows_reset_frees_the_lane(self):
+        # A rejected five-hour window reports utilization past 1 and names itself;
+        # once it resets the lane is available even while a weekly window is open.
+        event = {'type': 'rate_limit_event', 'rate_limit_info': {
+            'status': 'rejected', 'resetsAt': NOW + 60, 'rateLimitType': 'five_hour', 'unifiedWindows': {
+                'five_hour': {'utilization': 1.02, 'resetsAt': NOW + 60},
+                'seven_day': {'utilization': .37, 'resetsAt': NOW + WEEK / 2},
+                'seven_day_overage_included': {'utilization': .58, 'resetsAt': NOW + WEEK / 2}}}}
+        quota = usage.event_quota('claude', event)
+        self.assertEqual((quota['windows']['five_hour']['used'], quota['rejected_window']), (1.02, 'five_hour'))
+        self.assertEqual(usage.normalize_quota('claude', quota, normalized=True), quota)
+        thresholds = policy.quota_settings({})
+        observation = {'lane_key': 'claude@A', 'quota': quota}
+        self.assertEqual(policy.quota_assessment(observation, thresholds, NOW)['classification'], 'exhausted')
+        after = policy.quota_assessment(observation, thresholds, NOW + 61)
+        self.assertEqual(after['classification'], 'available', after['reasons'])
+        # Snapshots recorded before the fix lost both the number and the name.
+        stale = {'status': 'rejected', 'windows': {'five_hour': {'used': None, 'resets_at': NOW + 60},
+                                                   'seven_day_overage_included': {'used': .58, 'resets_at': NOW + WEEK / 2}}}
+        self.assertEqual(policy.quota_assessment({'lane_key': 'claude@A', 'quota': stale}, thresholds, NOW + 61)['classification'],
+                         'available')
 
     def test_explicit_route_is_retained(self):
         self.trace('claude@A', self.quota(1, 'rejected'))
