@@ -235,7 +235,9 @@ def normalize_quota(provider, value, *, normalized=False):
             continue
         used = window.get("used" if normalized else "utilization" if provider == "claude" else "used_percent")
         scale = 100 if provider == "codex" and not normalized else 1
-        valid = isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used) and 0 <= used <= scale
+        # A rejected window reports past its limit (utilization 1.02), so only
+        # the floor is checked; an upper bound would erase the rejection's cause.
+        valid = isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used) and 0 <= used
         reset = timestamp(window.get("resetsAt" if provider == "claude" and not normalized else "resets_at"))
         if not valid and reset is None:
             continue
@@ -246,7 +248,11 @@ def normalize_quota(provider, value, *, normalized=False):
         windows[name] = entry
     status = value.get("status")
     status = status if isinstance(status, str) else None
-    return {"windows": windows, "status": status} if windows or status else None
+    # The window a rejection names: Claude's rateLimitType, kept once normalized.
+    named = value.get("rejected_window" if normalized else "rateLimitType")
+    named = named if status == "rejected" and isinstance(named, str) and named in windows else None
+    return ({"windows": windows, "status": status, **({"rejected_window": named} if named else {})}
+            if windows or status else None)
 
 
 def event_quota(provider, event):
