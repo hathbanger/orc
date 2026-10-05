@@ -1845,17 +1845,22 @@ def api_spend_limit(text: str) -> dict[str, Any] | None:
     return {"status": "rejected", "windows": {"spend": {"used": 1.0, "resets_at": reset.timestamp()}}}
 
 
-def claude_key_source(stdout: str) -> str | None:
-    """Claude Code's own report of which credential a run used (init event apiKeySource)."""
+def claude_init(stdout: str) -> dict[str, Any]:
+    """Claude Code's init event: the credential, version and permission mode a run actually had."""
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
         except (ValueError, TypeError):
             continue
         if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
-            source = event.get("apiKeySource")
-            return source if isinstance(source, str) else None
-    return None
+            return event
+    return {}
+
+
+def claude_key_source(stdout: str) -> str | None:
+    """Claude Code's own report of which credential a run used (init event apiKeySource)."""
+    source = claude_init(stdout).get("apiKeySource")
+    return source if isinstance(source, str) else None
 
 
 def route_account(settings: dict[str, Any]) -> str:
@@ -2451,7 +2456,13 @@ def dispatch(
     duration_ms = int((time.monotonic() - started) * 1000)
     progress.emit(label, f"worker {status} after {progress.elapsed(duration_ms / 1000)}; exit {exit_code}")
     denied = provider_denials(task["agent"], worker_stdout)
-    key_source = claude_key_source(worker_stdout) if task["agent"] == "claude" else None
+    init = claude_init(worker_stdout) if task["agent"] == "claude" else {}
+    key_source = init.get("apiKeySource") if isinstance(init.get("apiKeySource"), str) else None
+    # The harness a worker really ran: the same flags behave differently across
+    # Claude Code versions, so a denial is only diagnosable with the version.
+    harness = {name: init[field] for name, field in (("provider_version", "claude_code_version"),
+                                                     ("provider_permission_mode", "permissionMode"))
+               if isinstance(init.get(field), str)}
     denied_tools = normalize_tools(item["tool"] for item in denied) or blocker_denied_tools(evidence_notes if task["agent"] != "codex" else [])
     # A worker that was denied only non-baseline tools (a Bash command outside its
     # allowlist) and still exited 0 with a handoff worked around the denial: that
@@ -2476,6 +2487,7 @@ def dispatch(
         "model": model,
         "reasoning_effort": metadata.get("reasoning_effort"),
         **({"api_key_source": key_source} if key_source is not None else {}),
+        **harness,
         "execution_choice": metadata.get("execution_choice"),
         "summary": compact(str(handoff.get("summary") or summary).strip(), int(config.get("max_result_chars", 12000))),
         "changed": handoff.get("changed", []),

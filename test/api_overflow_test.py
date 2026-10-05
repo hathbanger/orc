@@ -123,7 +123,8 @@ class ApiOverflowTest(unittest.TestCase):
     def test_a_subscription_run_on_an_api_key_is_flagged(self):
         worker = self.root / "claude-fixture"
         worker.write_text(f"#!{sys.executable}\nimport json\n"
-                          "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'ANTHROPIC_API_KEY'}))\n"
+                          "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'ANTHROPIC_API_KEY',"
+                          "'claude_code_version':'9.9.9','permissionMode':'plan'}))\n"
                           "print(json.dumps({'type':'result','subtype':'success','is_error':False,'session_id':'s',"
                           "'result':'STATUS: success\\nSUMMARY: done\\nCHANGED: none\\nTESTS: none\\nBLOCKERS: none'}))\n")
         worker.chmod(0o755)
@@ -132,6 +133,7 @@ class ApiOverflowTest(unittest.TestCase):
         task = core.make_task(self.workspace, "claude", "x", "review", [], [], None, False, False)
         result = core.dispatch(config, task, core.RunStore(self.workspace))
         self.assertEqual(result["api_key_source"], "ANTHROPIC_API_KEY")
+        self.assertEqual((result["provider_version"], result["provider_permission_mode"]), ("9.9.9", "plan"))
         self.assertTrue(any(b.startswith("billing: a subscription lane ran on ANTHROPIC_API_KEY") for b in result["blockers"]))
 
 
