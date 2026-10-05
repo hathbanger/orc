@@ -131,7 +131,9 @@ lane a non-zero chance. Which estimate holds depends on the policy:
   `--policy thompson|epsilon` restrict the report to one policy era.
 
 `exploration` splits `explored` into `epsilon`, `thompson` (sampled picks whose
-model had `p_win` < 1) and `write_trial`.
+model had `p_win` < 1) and `write_trial`. Before this split, `explored` counted
+epsilon picks only, so cumulative figures that straddle the change are not
+comparable.
 
 ### Write trials
 
