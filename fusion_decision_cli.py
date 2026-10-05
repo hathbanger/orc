@@ -49,6 +49,11 @@ def add_parser(sub):
                          help="list each routed run instead: chosen model, propensity, posterior, cost, outcome and labels")
     routing.add_argument("--model", help="with --tasks: only runs whose chosen lane or model contains this text")
     routing.add_argument("--limit", type=int, default=200, help="with --tasks: newest N runs (default 200)")
+    routing.add_argument("--since", help="only choices logged since then: a duration (24h, 7d) or an ISO time")
+    routing.add_argument("--policy", choices=("thompson", "epsilon"),
+                         help="only choices made under this logging policy (thompson: sampled gating picks; epsilon: explored reads)")
+    routing.add_argument("--by", choices=("lane", "family"), default="lane",
+                         help="estimate per lane (default) or per agent/model/effort family, whose propensity is its p_win")
     calibrate = commands.add_parser("calibrate", help="fit temperature on train; certify an acting threshold on held-out groups (Learn-then-Test)")
     calibrate.add_argument("dataset")
     calibrate.add_argument("output")
@@ -176,7 +181,10 @@ def run(args, workspace, config):
         payload = routing_tasks(read_jsonl(store.path), core.RunStore(workspace).traces(10000), args.model, args.limit)
     elif command == "routing-report":
         from fusion_policy import routing_report
-        payload = routing_report(read_jsonl(store.path))
+        from fusion_usage import since_time
+        since = int(since_time(args.since).timestamp() * 1000) if getattr(args, "since", None) else None
+        payload = routing_report(read_jsonl(store.path), since=since, policy=getattr(args, "policy", None),
+                                 by=getattr(args, "by", "lane"))
     elif command == "export":
         payload = store.export(args.output, getattr(args, "exclude_source", []),
                                getattr(args, "split", None) or options["split"])

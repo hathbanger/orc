@@ -937,13 +937,23 @@ per-lane acceptance from logged routing propensities (IPS, ESS); read-only
 
 ```text
 usage: fusion decisions routing-report [-h] [--tasks] [--model MODEL] [--limit LIMIT]
+                                       [--since SINCE] [--policy {thompson,epsilon}]
+                                       [--by {lane,family}]
 
 options:
-  -h, --help     show this help message and exit
-  --tasks        list each routed run instead: chosen model, propensity, posterior,
-                 cost, outcome and labels
-  --model MODEL  with --tasks: only runs whose chosen lane or model contains this text
-  --limit LIMIT  with --tasks: newest N runs (default 200)
+  -h, --help              show this help message and exit
+  --tasks                 list each routed run instead: chosen model, propensity,
+                          posterior, cost, outcome and labels
+  --model MODEL           with --tasks: only runs whose chosen lane or model contains
+                          this text
+  --limit LIMIT           with --tasks: newest N runs (default 200)
+  --since SINCE           only choices logged since then: a duration (24h, 7d) or an ISO
+                          time
+  --policy {thompson,epsilon}
+                          only choices made under this logging policy (thompson: sampled
+                          gating picks; epsilon: explored reads)
+  --by {lane,family}      estimate per lane (default) or per agent/model/effort family,
+                          whose propensity is its p_win
 ```
 
 ## fusion decisions calibrate

@@ -113,6 +113,26 @@ draws seeded per task. Each candidate's logged `propensity` is its model's
 `p_win` (0 for lanes that did not lead their model), so `routing-report`
 estimates stay valid. Selection does not weigh cost yet.
 
+### Reading routing-report
+
+`fusion decisions routing-report` estimates each lane's acceptance by inverse
+propensity weighting, which is only identified where the logging policy gave the
+lane a non-zero chance. Which estimate holds depends on the policy:
+
+- **Epsilon** (`decisions.routing_epsilon`) explores read-only work only. Writers
+  and reviews never take it, so a report of gating work shows `epsilon_ineligible`
+  instead of advice to raise epsilon.
+- **Thompson** (`decisions.gating_policy: "thompson"`) gives each model family its
+  `p_win`, and 0 to every lane that didn't lead its family. Per lane, a family's
+  second lane is never identified; `--by family` pools lanes of one
+  agent/model/effort and uses the family's `p_win`, which is identified.
+- Deterministic logs from before a policy existed have propensity 0 for every
+  lane they didn't choose, so they deny overlap forever. `--since T` and
+  `--policy thompson|epsilon` restrict the report to one policy era.
+
+`exploration` splits `explored` into `epsilon`, `thompson` (sampled picks whose
+model had `p_win` < 1) and `write_trial`.
+
 ### Write trials
 
 Deprecated: superseded by gating sampling, and ignored when

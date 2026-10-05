@@ -966,7 +966,36 @@ def rejection_counts(outcomes):
             for (issue, cls), count in sorted(counts.items(), key=lambda item: (item[0][0], str(item[0][1])))]
 
 
-def routing_report(events):
+REPORT_POLICIES = ("thompson", "epsilon")
+
+
+def _family(candidate):
+    return ":".join(str(part) for part in (candidate.get("agent"), candidate.get("model") or "default",
+                                           candidate.get("reasoning_effort")) if part)
+
+
+def _log_policy_matches(log, policy):
+    if policy is None:
+        return True
+    if policy == "thompson":
+        return (log.get("policy") or {}).get("gating_policy") == "thompson" or bool(log.get("sampled"))
+    return float((log.get("policy") or {}).get("epsilon") or 0) > 0
+
+
+def _exploration(log):
+    """Which exploration, if any, produced this logged choice."""
+    if log.get("explored"):
+        return "epsilon"
+    if log.get("write_trial"):
+        return "write_trial"
+    sampled = log.get("sampled") or {}
+    won = next((f for f in sampled.get("families") or [] if f.get("lead") == sampled.get("chosen")), None)
+    if won is not None and float(won.get("p_win") or 0) < 1:
+        return "thompson"
+    return None
+
+
+def routing_report(events, since=None, policy=None, by="lane"):
     """Per-lane acceptance from logged routing choices, inverse-propensity weighted.
 
     Joins each run's latest `routing_log` to its latest outcome (gate or lead)
@@ -975,7 +1004,19 @@ def routing_report(events):
     candidate: `ips_acceptance` is sum(accepted / propensity for choices of the
     lane) / available, `snips_acceptance` normalises by the summed weights, and
     `ess` is (sum w)^2 / sum w^2. A lane given propensity 0 in any of those
-    choices has no overlap there, so neither estimate is reported for it."""
+    choices has no overlap there, so neither estimate is reported for it.
+
+    Which estimate is identified depends on the logging policy. `since` (epoch
+    ms) and `policy` ("thompson": gating picks sampled from model posteriors;
+    "epsilon": epsilon-explored read work) restrict the report to one era, so
+    deterministic logs from before sampling can't deny overlap forever. With
+    `by="family"`, lanes of one agent/model/effort pool into their family,
+    whose propensity is the sum over its lanes (its p_win under Thompson), so a
+    lane that never leads its family is still estimated through the family."""
+    if policy is not None and policy not in REPORT_POLICIES:
+        raise ValueError("policy must be one of " + ", ".join(REPORT_POLICIES))
+    if by not in ("lane", "family"):
+        raise ValueError("by must be lane or family")
     events = list(events)
     logs, outcomes, vetoed, sources = {}, effective_outcomes(events), 0, {}
     controlled = 0  # Operator-pause refusals: no worker ran, so they are not routing choices.
@@ -987,6 +1028,10 @@ def routing_report(events):
             key = (event.get("issue"), event.get("role"))
             capped[key] = capped.get(key, 0) + 1
         elif event.get("event") == "routing_log" and event.get("task_id"):
+            if since is not None and (event.get("time_ms") or 0) < since:
+                continue
+            if not _log_policy_matches(event, policy):
+                continue
             logs[event["task_id"]] = event
     lanes = {}
     joined = 0
@@ -1001,14 +1046,22 @@ def routing_report(events):
         source = outcome.get("source") or "gate"
         sources[source] = sources.get(source, 0) + 1
         reward = 1.0 if outcome.get("accepted") else 0.0
+        units = {}
         for candidate in log.get("candidates") or []:
-            lane = lanes.setdefault(candidate["key"], {"key": candidate["key"], "available": 0, "chosen": 0, "accepted": 0,
-                                                       "zero_propensity": 0, "_w": 0.0, "_w2": 0.0, "_wr": 0.0})
-            propensity = float(candidate.get("propensity") or 0)
+            key = _family(candidate) if by == "family" else candidate["key"]
+            unit = units.setdefault(key, {"propensity": 0.0, "chosen": False, "lanes": set()})
+            unit["propensity"] += float(candidate.get("propensity") or 0)
+            unit["chosen"] = unit["chosen"] or log.get("chosen") == candidate["key"]
+            unit["lanes"].add(candidate["key"])
+        for key, unit in units.items():
+            lane = lanes.setdefault(key, {"key": key, "available": 0, "chosen": 0, "accepted": 0, "zero_propensity": 0,
+                                          "_w": 0.0, "_w2": 0.0, "_wr": 0.0, "_lanes": set()})
+            lane["_lanes"] |= unit["lanes"]
+            propensity = min(1.0, unit["propensity"])
             lane["available"] += 1
             if propensity <= 0:
                 lane["zero_propensity"] += 1
-            if log.get("chosen") == candidate["key"] and propensity > 0:
+            if unit["chosen"] and propensity > 0:
                 weight = 1 / propensity
                 lane["chosen"] += 1
                 lane["accepted"] += int(reward)
@@ -1018,20 +1071,33 @@ def routing_report(events):
     rows = []
     for lane in sorted(lanes.values(), key=lambda item: (-item["available"], item["key"])):
         weight, square, weighted = lane.pop("_w"), lane.pop("_w2"), lane.pop("_wr")
+        members = sorted(lane.pop("_lanes"))
         overlap = lane["zero_propensity"] == 0 and lane["chosen"] > 0
         lane.update(observed_acceptance=lane["accepted"] / lane["chosen"] if lane["chosen"] else None,
                     ips_acceptance=weighted / lane["available"] if overlap else None,
                     snips_acceptance=weighted / weight if overlap else None,
                     ess=round(weight * weight / square, 3) if square else 0.0,
-                    overlap="ok" if overlap else "insufficient overlap")
+                    overlap="ok" if overlap else "insufficient overlap",
+                    **({"lanes": members} if by == "family" else {}))
         rows.append(lane)
+    kinds = [_exploration(log) for log in logs.values()]
+    exploration = {kind: kinds.count(kind) for kind in ("epsilon", "thompson", "write_trial")}
+    ineligible = sum(1 for log in logs.values() if gating({"write": log.get("write"), "role": log.get("role")}))
     warnings = []
     if any(lane["overlap"] != "ok" for lane in rows):
-        warnings.append("insufficient overlap: some lanes had propensity 0 where they were available or were never chosen; "
-                        "their counterfactual acceptance is not identified. Set decisions.routing_epsilon above 0 to explore.")
+        text = ("insufficient overlap: some lanes had propensity 0 where they were available or were never chosen; "
+                "their counterfactual acceptance is not identified.")
+        if ineligible:
+            text += (f" {ineligible} of {len(logs)} choices were gating work (writers and reviews), where epsilon does not "
+                     "apply; under gating_policy thompson, use --policy thompson --by family.")
+        epsilon = max((float((log.get("policy") or {}).get("routing_epsilon") or 0) for log in logs.values()), default=0.0)
+        if len(logs) > ineligible and not epsilon:
+            text += " Set decisions.routing_epsilon above 0 to explore read-only work."
+        warnings.append(text)
     if len(logs) - joined - vetoed:
         warnings.append(f"{len(logs) - joined - vetoed} logged routing choices have no outcome yet")
     return {"schema": "fusion.routing_report.v1", "logged_choices": len(logs), "with_outcome": joined,
+            "filters": {"since": since, "policy": policy, "by": by},
             "routing_policies": [{"task_id": task_id, "policy": log.get("policy", {}),
                                   "cost_tiers": {c["key"]: c.get("cost_tier") for c in log.get("candidates") or []}}
                                  for task_id, log in logs.items()],
@@ -1040,7 +1106,8 @@ def routing_report(events):
             "vetoed_outcomes_skipped": vetoed, "outcome_sources": sources, "control_refusals": controlled,
             "rejections": rejection_counts(outcomes),
             "capped": [{"issue": issue, "role": role, "count": count} for (issue, role), count in sorted(capped.items(), key=str)],
-            "explored": sum(bool(log.get("explored")) for log in logs.values()), "lanes": rows, "warnings": warnings}
+            "explored": sum(exploration.values()), "exploration": exploration, "epsilon_ineligible": ineligible,
+            "lanes": rows, "warnings": warnings}
 
 
 def review_task(config, task, store=None):
