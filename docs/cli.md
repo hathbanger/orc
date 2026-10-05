@@ -322,7 +322,7 @@ usage: fusion delegate [-h] [--agent {auto,claude,codex,agy,grok,opencode}]
                        [--fresh] [--session-key SESSION_KEY] [--route ROUTE]
                        [--model MODEL]
                        [--reasoning-effort {high,low,max,medium,minimal,none,ultra,xhigh}]
-                       [--success SUCCESS] [--constraint CONSTRAINT]
+                       [--success SUCCESS] [--constraint CONSTRAINT] [--issue ISSUE]
                        task
 
 positional arguments:
@@ -348,6 +348,8 @@ options:
                           Codex, or Claude Code (low-max); requires --model
   --success SUCCESS
   --constraint CONSTRAINT
+  --issue ISSUE           target issue as owner/repo#N; recorded on the run so outcomes
+                          and reports can count per issue
 ```
 
 ## fusion outcome
@@ -357,6 +359,9 @@ record the lead's verdict on a delegated run
 ```text
 usage: fusion outcome [-h] (--accepted | --rejected | --withdraw | --unmeasured)
                       [--stage {gate,verify,land,review}] [--reason REASON]
+                      [--issue ISSUE]
+                      [--rejection-class {suite_red,no_diff,out_of_scope,eval_unmeasured,review_changes,land_conflict,other}]
+                      [--reporter REPORTER]
                       run_id
 
 positional arguments:
@@ -372,6 +377,12 @@ options:
                           external lifecycle stage; the latest measured verdict wins
   --reason REASON         what you verified; required for the verdict to become an
                           acceptance label
+  --issue ISSUE           target issue as owner/repo#N (defaults to the run's delegated
+                          issue)
+  --rejection-class {suite_red,no_diff,out_of_scope,eval_unmeasured,review_changes,land_conflict,other}
+                          why a rejected run was rejected
+  --reporter REPORTER     who reports the verdict, for example tenet; stored apart from
+                          source
 ```
 
 ## fusion ultra

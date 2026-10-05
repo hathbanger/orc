@@ -954,6 +954,18 @@ def effective_outcomes(events):
             for run_id in independent.keys() | external.keys() if run_id not in untrusted}
 
 
+def rejection_counts(outcomes):
+    """[{issue, rejection_class, count}] over runs whose latest measured outcome is a rejection
+    that names an issue; withdrawn verdicts are already gone from `outcomes`."""
+    counts = {}
+    for event in outcomes.values():
+        if event.get("accepted") is False and event.get("issue"):
+            key = (event["issue"], event.get("rejection_class"))
+            counts[key] = counts.get(key, 0) + 1
+    return [{"issue": issue, "rejection_class": cls, "count": count}
+            for (issue, cls), count in sorted(counts.items(), key=lambda item: (item[0][0], str(item[0][1])))]
+
+
 def routing_report(events):
     """Per-lane acceptance from logged routing choices, inverse-propensity weighted.
 
@@ -1022,6 +1034,7 @@ def routing_report(events):
             "quota_decisions": [{"task_id": task_id, "chosen": log.get("chosen"), "quota": log["quota"],
                                  "rejected": log.get("rejected", {})} for task_id, log in logs.items() if log.get("quota")],
             "vetoed_outcomes_skipped": vetoed, "outcome_sources": sources, "control_refusals": controlled,
+            "rejections": rejection_counts(outcomes),
             "explored": sum(bool(log.get("explored")) for log in logs.values()), "lanes": rows, "warnings": warnings}
 
 

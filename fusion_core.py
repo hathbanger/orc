@@ -1225,6 +1225,7 @@ class RunStore:
             "execution_mode": task_execution_mode(config, task),
             "agent": task["agent"],
             "role": task["role"],
+            **({"issue": task["issue"]} if task.get("issue") else {}),
             "route": task.get("route"),
             "model": metadata.get("model"),
             "reasoning_effort": metadata.get("reasoning_effort"),
@@ -2356,8 +2357,23 @@ def run_directory(workspace: Path, run_id: str) -> Path | None:
     return None
 
 
+REJECTION_CLASSES = ("suite_red", "no_diff", "out_of_scope", "eval_unmeasured", "review_changes", "land_conflict", "other")
+ISSUE_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+")
+
+
+def validate_issue(issue: Any) -> str | None:
+    """A target issue as owner/repo#N, or None."""
+    if issue is None or issue == "":
+        return None
+    if not isinstance(issue, str) or not ISSUE_RE.fullmatch(issue):
+        raise ValueError("issue must look like owner/repo#123")
+    return issue
+
+
 def record_outcome(workspace: Path, run_id: str, accepted: bool | None = None, reason: str = "", *,
-                   stage: str | None = None, withdraw: bool = False, unmeasured: bool = False) -> dict[str, Any]:
+                   stage: str | None = None, withdraw: bool = False, unmeasured: bool = False,
+                   issue: str | None = None, rejection_class: str | None = None,
+                   reporter: str | None = None) -> dict[str, Any]:
     """The lead's verdict on a delegation, after inspecting its diff and tests.
 
     Delegations have no coordinator gate, so without this their only signal is
@@ -2370,6 +2386,11 @@ def record_outcome(workspace: Path, run_id: str, accepted: bool | None = None, r
     Stages are metadata; append order determines the latest measured verdict.
     Withdrawal removes all prior external verdicts, preserving independent gate
     evidence. Unmeasured is audit-only and leaves the last measured verdict intact.
+
+    `issue` (owner/repo#N; defaults to the issue the run was delegated with),
+    `rejection_class` (rejections only) and `reporter` (who reported it; `source`
+    stays "lead", which outcome precedence relies on) let rejections be counted
+    per issue and cause.
     """
     from fusion_decisions import DecisionStore
     if accepted is not None and not isinstance(accepted, bool):
@@ -2384,6 +2405,14 @@ def record_outcome(workspace: Path, run_id: str, accepted: bool | None = None, r
         raise ValueError("withdraw requires a reason")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id or ""):
         raise ValueError("run_id must be a Fusion run id")
+    issue = validate_issue(issue)
+    if rejection_class is not None:
+        if rejection_class not in REJECTION_CLASSES:
+            raise ValueError("rejection class must be one of " + ", ".join(REJECTION_CLASSES))
+        if accepted is not False:
+            raise ValueError("a rejection class goes only with a rejected verdict")
+    if reporter is not None and (not isinstance(reporter, str) or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", reporter)):
+        raise ValueError("reporter must be a short name (letters, digits, _ . @ -)")
     workspace = RunStore(workspace).workspace
     result_path = (run_directory(workspace, run_id) or RunStore(workspace).runs / run_id) / "result.json"
     try:
@@ -2396,6 +2425,9 @@ def record_outcome(workspace: Path, run_id: str, accepted: bool | None = None, r
              "evidence": str(result_path)}
     if stage is not None:
         event["stage"] = stage
+    issue = issue or validate_issue(result.get("issue"))
+    event.update({key: value for key, value in (("issue", issue), ("rejection_class", rejection_class),
+                                                ("reporter", reporter)) if value})
     if withdraw or unmeasured:
         mode = "withdraw" if withdraw else "unmeasured"
         event[mode] = True
@@ -2662,6 +2694,7 @@ def dispatch(
         "execution_mode": task_execution_mode(config, task),
         "agent": task["agent"],
         "role": task["role"],
+        **({"issue": task["issue"]} if task.get("issue") else {}),
         "route": task.get("route"),
         **({"quota_twin": task["quota_twin"]} if task.get("quota_twin") else {}),
         "model": model,
@@ -2892,6 +2925,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "route": {"type": "string", "description": "Optional named route such as orc-free or orc-best."},
                     "model": {"type": "string", "description": "Model for this task, overriding the route and agent settings."},
                     "reasoning_effort": {"type": "string", "enum": sorted(EFFORTS), "description": "Codex, or Claude Code (low-max); requires model."},
+                    "issue": {"type": "string", "pattern": ISSUE_RE.pattern, "description": "Target issue as owner/repo#N, recorded on the run."},
                     "needs": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}, "description": "Capabilities the task needs from its lane, such as local_server; automatic routing skips lanes whose config `lacks` one."},
                 },
                 "required": ["agent", "task"],
@@ -2910,6 +2944,9 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "unmeasured": {"type": "boolean"},
                     "stage": {"type": "string", "enum": ["gate", "verify", "land", "review"]},
                     "reason": {"type": "string", "description": "What you verified or why you rejected it. Required for the verdict to become a training label."},
+                    "issue": {"type": "string", "pattern": ISSUE_RE.pattern, "description": "Target issue as owner/repo#N; defaults to the run's delegated issue."},
+                    "rejection_class": {"type": "string", "enum": list(REJECTION_CLASSES), "description": "Why a rejected run was rejected."},
+                    "reporter": {"type": "string", "description": "Who reports the verdict; stored apart from source."},
                 },
                 "required": ["run_id"],
             },
@@ -3040,7 +3077,9 @@ def run_mcp(workspace: Path, config: dict[str, Any]) -> int:
                             raise ValueError("accepted must be true or false")
                         payload = record_outcome(workspace, str(args.get("run_id", "")), args.get("accepted"),
                                                  str(args.get("reason", "")), stage=args.get("stage"),
-                                                 withdraw=args.get("withdraw", False), unmeasured=args.get("unmeasured", False))
+                                                 withdraw=args.get("withdraw", False), unmeasured=args.get("unmeasured", False),
+                                                 issue=args.get("issue"), rejection_class=args.get("rejection_class"),
+                                                 reporter=args.get("reporter"))
                     elif name == "fusion_delegate":
                         timeout_seconds = validate_timeout(args["timeout_seconds"]) if "timeout_seconds" in args else None
                         agent = args.get("agent")
@@ -3069,6 +3108,8 @@ def run_mcp(workspace: Path, config: dict[str, Any]) -> int:
                         )
                         if not task["task"]:
                             raise ValueError("task is required")
+                        if validate_issue(args.get("issue")):
+                            task["issue"] = args["issue"]
                         payload = dispatch(target_config, task, target_store)
                     else:
                         target = workspace if name == "fusion_run_start" else store.workspace
@@ -3383,6 +3424,7 @@ def build_parser() -> argparse.ArgumentParser:
     delegate.add_argument("--reasoning-effort", choices=sorted(EFFORTS), help="Codex, or Claude Code (low-max); requires --model")
     delegate.add_argument("--success", action="append", default=[])
     delegate.add_argument("--constraint", action="append", default=[])
+    delegate.add_argument("--issue", help="target issue as owner/repo#N; recorded on the run so outcomes and reports can count per issue")
     delegate.add_argument("task")
 
     outcome = sub.add_parser("outcome", help="record the lead's verdict on a delegated run")
@@ -3395,6 +3437,9 @@ def build_parser() -> argparse.ArgumentParser:
     outcome.set_defaults(accepted=None)
     outcome.add_argument("--stage", choices=("gate", "verify", "land", "review"), help="external lifecycle stage; the latest measured verdict wins")
     outcome.add_argument("--reason", default="", help="what you verified; required for the verdict to become an acceptance label")
+    outcome.add_argument("--issue", help="target issue as owner/repo#N (defaults to the run's delegated issue)")
+    outcome.add_argument("--rejection-class", choices=REJECTION_CLASSES, help="why a rejected run was rejected")
+    outcome.add_argument("--reporter", help="who reports the verdict, for example tenet; stored apart from source")
 
     ultra = sub.add_parser("ultra", help="run a bounded UltraCode-style explore/plan/implement/review pipeline")
     ultra.add_argument("--stages", type=int, help="maximum number of configured stages")
@@ -3755,8 +3800,13 @@ def _main(args, parser) -> int:
         lead = args.agent or config.get("lead", "claude")
         return launch_lead(workspace, config, lead, args.task, interactive=args.command == "lead")
     if args.command == "outcome":
-        print(json_text(record_outcome(workspace, args.run_id, args.accepted, args.reason,
-                                       stage=args.stage, withdraw=args.withdraw, unmeasured=args.unmeasured)))
+        try:
+            payload = record_outcome(workspace, args.run_id, args.accepted, args.reason, stage=args.stage,
+                                     withdraw=args.withdraw, unmeasured=args.unmeasured, issue=args.issue,
+                                     rejection_class=args.rejection_class, reporter=args.reporter)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json_text(payload))
         return 0
     if args.command == "delegate":
         if args.agent is None:
@@ -3785,6 +3835,11 @@ def _main(args, parser) -> int:
             timeout_seconds=args.timeout,
             needs=args.needs,
         )
+        try:
+            if validate_issue(args.issue):
+                task["issue"] = args.issue
+        except ValueError as exc:
+            parser.error(str(exc))
         result = dispatch(config, task, RunStore(workspace))
         print_result(result, args.json)
         return 0 if result["status"] == "success" else 2 if result["status"] == "paused_control" else 1

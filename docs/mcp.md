@@ -151,6 +151,11 @@ Delegate a bounded task to the other coding agent and receive a structured hando
       },
       "type": "array"
     },
+    "issue": {
+      "description": "Target issue as owner/repo#N, recorded on the run.",
+      "pattern": "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+",
+      "type": "string"
+    },
     "model": {
       "description": "Model for this task, overriding the route and agent settings.",
       "type": "string"
@@ -236,8 +241,30 @@ Record a verdict on a run. The latest measured verdict ranks future automatic ro
     "accepted": {
       "type": "boolean"
     },
+    "issue": {
+      "description": "Target issue as owner/repo#N; defaults to the run's delegated issue.",
+      "pattern": "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+",
+      "type": "string"
+    },
     "reason": {
       "description": "What you verified or why you rejected it. Required for the verdict to become a training label.",
+      "type": "string"
+    },
+    "rejection_class": {
+      "description": "Why a rejected run was rejected.",
+      "enum": [
+        "suite_red",
+        "no_diff",
+        "out_of_scope",
+        "eval_unmeasured",
+        "review_changes",
+        "land_conflict",
+        "other"
+      ],
+      "type": "string"
+    },
+    "reporter": {
+      "description": "Who reports the verdict; stored apart from source.",
       "type": "string"
     },
     "run_id": {
