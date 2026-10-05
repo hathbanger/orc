@@ -92,7 +92,32 @@ the effective `cost_epsilon` when cost ranking applies. `fusion decisions
 routing-report` includes `routing_policies` with each decision's policy and
 candidate cost tiers, even before an outcome exists.
 
+### Gating sampling
+
+With `decisions.gating_policy: "thompson"`, automatic gating work is not given
+to the top-ranked lane but sampled. Evidence is pooled per model. Every lane in
+the recent history that runs the same agent, model and effort contributes its
+local verified outcomes, including lanes that this decision filtered out (a
+subscription lane out of quota still teaches about its model). The same role or
+work-class scope applies as for ranking. Gym priors never enter the posterior.
+Each model draws once from Beta(1 + accepted, 1 + rejected), the highest draw
+wins, and within that model the ranked order picks the lane. Overflow lanes are
+already removed while a primary lane survives. A review that prefers a different
+agent samples only among other agents when one is available. A qualified Laya
+recommendation still wins. Pinned routes and read-only work are unaffected.
+
+The routing log row records `sampled`: each model's `successes`, `attempts`,
+`lanes`, `cost_per_accepted` (reported spend of the counted runs per accepted
+one) and `p_win`. `p_win` is its chance of being the best, estimated from 4000
+draws seeded per task. Each candidate's logged `propensity` is its model's
+`p_win` (0 for lanes that did not lead their model), so `routing-report`
+estimates stay valid. Selection does not weigh cost yet.
+
 ### Write trials
+
+Deprecated: superseded by gating sampling, and ignored when
+`gating_policy` is `thompson`.
+
 
 A writer or a review never explores: once any lane has `minimum` checked runs,
 the unproven lanes rank below it, so a newly admitted lane never earns write

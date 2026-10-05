@@ -105,6 +105,23 @@ or route. Unset, every configured lane is a candidate.
 {"decisions": {"auto_routes": ["claude-opus-medium", "claude-opus-high", "codex-astra-medium", "codex-astra-high"]}}
 ```
 
+`decisions.gating_policy` chooses how automatic gating work (a writer, or a
+role containing `review`) picks among the lanes that survive every filter.
+`rank` (the default) takes the lane with the best smoothed acceptance rate.
+`thompson` pools each model's local verified outcomes across every lane that
+runs it (subscription and API lanes of the same agent, model and effort), draws
+once from each model's Beta posterior, and takes the highest draw. A model with
+little evidence therefore gets work in proportion to its chance of being the
+best, and that share shrinks or grows by itself as outcomes arrive. It needs
+`decisions.rank_by_outcomes`; anything other than `rank` or `thompson` is an
+error. See [gating sampling](routing.md#gating-sampling).
+
+```json
+{"decisions": {"rank_by_outcomes": 3, "gating_policy": "thompson"}}
+```
+
+Deprecated: `decisions.write_trials` is superseded by `gating_policy:
+"thompson"` and is ignored when it is set.
 `decisions.write_trials` lists configured route names that may take work that
 ships or gates (a writer or a review) before they have evidence for it. Gating
 work never explores, so without it a new lane never gets its first write while

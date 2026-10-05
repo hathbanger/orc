@@ -1933,3 +1933,9 @@ summary {
 @media (prefers-reduced-motion:reduce) { .lab-tabs [role=tab] { transition:none; } }
 .label-saved-status { display:flex; align-items:center; gap:12px; color:var(--green); border:1px solid var(--success-line); background:var(--success-soft); padding:14px 18px; border-radius:10px; margin:18px 0; }
 .label-saved-status .guild-icon { flex:none; }
+
+.routing-filter { display: flex; gap: 12px; align-items: flex-end; margin: 0 0 16px; flex-wrap: wrap; }
+.routing-filter .field { flex: 1 1 260px; margin: 0; }
+.routing-models { display: flex; flex-wrap: wrap; gap: 8px; }
+.routing-row .run-meta + .run-meta { margin-top: 6px; }
+.routing-row .run-meta .button.small { padding: 2px 8px; }

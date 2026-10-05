@@ -1147,7 +1147,7 @@ function readRoute() {
   const [path, query = ""] = location.hash.slice(1).split("?");
   const parts = path.split("/");
   const params = new URLSearchParams(query);
-  const view = ["overview", "workflows", "workflow", "truffle", "decisions", "models", "settings"].includes(parts[0]) ? parts[0] : "overview";
+  const view = ["overview", "workflows", "workflow", "truffle", "routing", "decisions", "models", "settings"].includes(parts[0]) ? parts[0] : "overview";
   let id = null;
   try { id = parts[1] ? decodeURIComponent(parts[1]) : null; } catch {}
   return {view, id: view === "decisions" ? null : id, workspace: params.get("w"),
@@ -1206,6 +1206,7 @@ async function navigate(view, id = null, options = {}) {
       workflows: "Workflows",
       workflow: "Workflow",
       truffle: "Truffle pig",
+      routing: "Routing",
       decisions: "Laya lab",
       models: "ORC models",
       settings: "Settings",
@@ -1243,6 +1244,12 @@ async function refresh(force = false) {
       state.scout = scout;
       signature = pretty({scout, hunts:data.hunts, jobs:data.jobs});
     }
+    if (state.view === "routing") {
+      const routing = await api("routing-tasks" + (state.routingModel ? "?model=" + encodeURIComponent(state.routingModel) : ""), undefined, w);
+      if (epoch !== state.epoch) return;
+      state.routing = routing;
+      signature = pretty(routing);
+    }
     if (state.view === "workflow") {
       const report = await api(
         "workflow?id=" + encodeURIComponent(state.id),
@@ -1279,6 +1286,7 @@ async function refresh(force = false) {
       if (state.view === "overview") overview();
       else if (state.view === "workflows") workflows();
       else if (state.view === "truffle") truffleView();
+      else if (state.view === "routing") routingView();
       else if (state.view === "workflow") workflow();
       else if (state.view === "decisions") decisions();
       else if (state.view === "settings") settings();
@@ -1351,6 +1359,8 @@ document.addEventListener("click", async (event) => {
       ORCAppearance.set({ mode: target.dataset.mode });
     else if (a === "activity-latest") $(".worker-timeline")?.scrollTo({top: $(".worker-timeline").scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"});
     else if (a === "close") closeModal();
+    else if (a === "routing-filter") { state.routingModel = target.dataset.model || ""; state.signature = ""; await refresh(true); }
+    else if (a === "routing-review") { const decision = target.dataset.id; await navigate("decisions"); openLabTab("review", {decision}); }
     else if (a === "template") target.dataset.template === "truffle" ? openHunt() : openLaunch(templates[target.dataset.template]);
     else if (a === "truffle-hunt") openHunt();
     else if (a === "truffle-open") { closeModal(); forestRoute(); await navigate("truffle", target.dataset.id || null); }
@@ -1524,7 +1534,9 @@ document.addEventListener("submit", async (event) => {
   if (submit) submit.disabled = true;
   try {
     const values = Object.fromEntries(new FormData(form));
-    if (form.id === "reconnect-form") {
+    if (form.id === "routing-filter") {
+      state.routingModel = (values.model || "").trim(); state.signature = ""; await refresh(true);
+    } else if (form.id === "reconnect-form") {
       await reconnectWithURL(values.url.trim());
       closeModal();
       toast("Reconnected. Your other tabs can use this connection too.");

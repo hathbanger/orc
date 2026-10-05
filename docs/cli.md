@@ -853,10 +853,14 @@ options:
 per-lane acceptance from logged routing propensities (IPS, ESS); read-only
 
 ```text
-usage: fusion decisions routing-report [-h]
+usage: fusion decisions routing-report [-h] [--tasks] [--model MODEL] [--limit LIMIT]
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help     show this help message and exit
+  --tasks        list each routed run instead: chosen model, propensity, posterior,
+                 cost, outcome and labels
+  --model MODEL  with --tasks: only runs whose chosen lane or model contains this text
+  --limit LIMIT  with --tasks: newest N runs (default 200)
 ```
 
 ## fusion decisions calibrate
