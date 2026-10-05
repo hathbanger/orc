@@ -2925,7 +2925,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "route": {"type": "string", "description": "Optional named route such as orc-free or orc-best."},
                     "model": {"type": "string", "description": "Model for this task, overriding the route and agent settings."},
                     "reasoning_effort": {"type": "string", "enum": sorted(EFFORTS), "description": "Codex, or Claude Code (low-max); requires model."},
-                    "issue": {"type": "string", "pattern": ISSUE_RE.pattern, "description": "Target issue as owner/repo#N, recorded on the run."},
+                    "issue": {"type": "string", "pattern": "^" + ISSUE_RE.pattern + "$", "description": "Target issue as owner/repo#N, recorded on the run."},
                     "needs": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}, "description": "Capabilities the task needs from its lane, such as local_server; automatic routing skips lanes whose config `lacks` one."},
                 },
                 "required": ["agent", "task"],
@@ -2944,7 +2944,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "unmeasured": {"type": "boolean"},
                     "stage": {"type": "string", "enum": ["gate", "verify", "land", "review"]},
                     "reason": {"type": "string", "description": "What you verified or why you rejected it. Required for the verdict to become a training label."},
-                    "issue": {"type": "string", "pattern": ISSUE_RE.pattern, "description": "Target issue as owner/repo#N; defaults to the run's delegated issue."},
+                    "issue": {"type": "string", "pattern": "^" + ISSUE_RE.pattern + "$", "description": "Target issue as owner/repo#N; defaults to the run's delegated issue."},
                     "rejection_class": {"type": "string", "enum": list(REJECTION_CLASSES), "description": "Why a rejected run was rejected."},
                     "reporter": {"type": "string", "description": "Who reports the verdict; stored apart from source."},
                 },
@@ -3427,7 +3427,9 @@ def build_parser() -> argparse.ArgumentParser:
     delegate.add_argument("--issue", help="target issue as owner/repo#N; recorded on the run so outcomes and reports can count per issue")
     delegate.add_argument("task")
 
-    outcome = sub.add_parser("outcome", help="record the lead's verdict on a delegated run")
+    outcome = sub.add_parser("outcome", help="record the lead's verdict on a delegated run",
+                             description="Record the lead's verdict on a delegated run. An invalid run id, issue, rejection "
+                                         "class or reporter exits 2 and records nothing.")
     outcome.add_argument("run_id")
     verdict = outcome.add_mutually_exclusive_group(required=True)
     verdict.add_argument("--accepted", dest="accepted", action="store_true")

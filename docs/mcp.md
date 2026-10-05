@@ -153,7 +153,7 @@ Delegate a bounded task to the other coding agent and receive a structured hando
     },
     "issue": {
       "description": "Target issue as owner/repo#N, recorded on the run.",
-      "pattern": "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
       "type": "string"
     },
     "model": {
@@ -243,7 +243,7 @@ Record a verdict on a run. The latest measured verdict ranks future automatic ro
     },
     "issue": {
       "description": "Target issue as owner/repo#N; defaults to the run's delegated issue.",
-      "pattern": "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
       "type": "string"
     },
     "reason": {

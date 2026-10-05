@@ -364,6 +364,9 @@ usage: fusion outcome [-h] (--accepted | --rejected | --withdraw | --unmeasured)
                       [--reporter REPORTER]
                       run_id
 
+Record the lead's verdict on a delegated run. An invalid run id, issue, rejection class
+or reporter exits 2 and records nothing.
+
 positional arguments:
   run_id
 
