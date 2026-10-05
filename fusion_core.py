@@ -128,6 +128,8 @@ DEFAULTS: dict[str, Any] = {
         "permission_prompts": "none",
         "model": "",
         "allowed_tools": [],
+        "max_bash_denials": 6,
+        "max_baseline_denials": 2,
     },
     "agy": {
         "command": "agy",
@@ -427,7 +429,10 @@ def classify_verdict(result: dict[str, Any]) -> dict[str, Any]:
     blocked_by_permissions. It is derived from failure_class(), the one vocabulary lane cooldown,
     recovery and telemetry already share, so the four can never disagree. Status comes first: a
     successful run that mentions a rate limit in its summary is ok. A quota carries the reset text
-    the CLI printed, so a harness can treat it as an unmeasured round instead of a zero score."""
+    the CLI printed, so a harness can treat it as an unmeasured round instead of a zero score.
+    A permission denial is blocked_by_permissions whatever the exit code: a denied baseline tool
+    leaves the run an error even at exit 0 (only non-baseline denials a worker worked around are
+    downgraded to partial), and a Claude run the denial guard stopped exits 125."""
     kind = failure_class(result)
     if kind == "permission_denied":
         return {"verdict": "blocked_by_permissions", "reason": ", ".join(result.get("denied_tools") or []) or "permission denied"}
@@ -696,7 +701,157 @@ def _denial_name(item: Any) -> str | None:
     return str(name) if name else None
 
 
+# Claude Code's own wording when it refuses a tool call, anchored to the start of
+# the tool result: a failed command's output that merely contains such a phrase
+# (or says "Permission denied") is not a denial.
+CLAUDE_DENIAL_TEXT = re.compile(r"\A\s*(?:<tool_use_error>\s*)?(?:Permission to use \S+.* has been denied|"
+                                r"Permission for this tool use was denied|"
+                                r"File is in a directory that is denied by your permission settings)", re.IGNORECASE | re.DOTALL)
+# A deny rule refusing a protected path is policy working as configured, not a
+# lane that can't do its job; it is recorded but never stops a run.
+CLAUDE_DENY_RULE_TEXT = re.compile(r"denied by your permission settings", re.IGNORECASE)
+
+
+def _claude_events(stdout: str):
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def _claude_blocks(event: dict[str, Any], kind: str):
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    for block in content if isinstance(content, list) else []:
+        if isinstance(block, dict) and block.get("type") == kind:
+            yield block
+
+
+def _block_text(block: dict[str, Any]) -> str:
+    content = block.get("content")
+    if isinstance(content, list):
+        return " ".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+    return str(content or "")
+
+
+def claude_stream_denials(stdout: str) -> list[dict[str, str]]:
+    """Denied tool calls as the stream shows them, in order, with Claude Code's decision reason when it gives one.
+
+    A `system`/`permission_denied` event names the tool and its `decision_reason_type`;
+    some denials (a Read deny rule) only show as an erroring tool_result in Claude Code's own words."""
+    uses: dict[str, tuple[str, Any]] = {}
+    denials: dict[str, dict[str, str]] = {}
+    for event in _claude_events(stdout):
+        if event.get("type") == "assistant":
+            for block in _claude_blocks(event, "tool_use"):
+                uses[str(block.get("id"))] = (str(block.get("name") or "tool"), block.get("input"))
+        elif event.get("type") == "system" and event.get("subtype") == "permission_denied":
+            key = str(event.get("tool_use_id"))
+            entry = denials.setdefault(key, {"tool": str(event.get("tool_name") or uses.get(key, ("tool",))[0])})
+            if isinstance(event.get("decision_reason_type"), str):
+                entry["reason_type"] = event["decision_reason_type"]
+            if isinstance(event.get("message"), str):
+                entry["message"] = event["message"][:240]
+        elif event.get("type") == "user":
+            for block in _claude_blocks(event, "tool_result"):
+                key, text = str(block.get("tool_use_id")), _block_text(block)
+                if block.get("is_error") and CLAUDE_DENIAL_TEXT.search(text):
+                    entry = denials.setdefault(key, {"tool": uses.get(key, ("tool",))[0]})
+                    entry.setdefault("message", text.replace("<tool_use_error>", "").replace("</tool_use_error>", "")[:240])
+    result = []
+    for key, entry in denials.items():
+        tool_input = uses.get(key, (None, None))[1]
+        head = json.dumps(tool_input, ensure_ascii=False, separators=(",", ":")) if isinstance(tool_input, (dict, list)) else str(tool_input or "")
+        names = normalize_tools([entry["tool"]])
+        if names:
+            result.append({"tool": names[0], "input_head": head[:120], "tool_use_id": key,
+                           **{k: entry[k] for k in ("reason_type", "message") if k in entry}})
+    return result
+
+
+def claude_denial_guard(max_bash: int, max_baseline: int = 2):
+    """Stop a Claude run that can't do its job instead of letting it run to exit.
+
+    Baseline-tool denials (Read, Edit, Write ...) stop it once `max_baseline`
+    happened; a deny rule on a protected path never counts (that is policy
+    working). Bash denials stop it once `max_bash` come in a row; a successful
+    Bash call in between resets the count, so a worker that works around a
+    denied command keeps going. 0 disables either limit."""
+    state = {"uses": {}, "seen": set(), "bash": 0, "baseline": 0}
+
+    def judge(key: str, tool: str, message: str) -> str | None:
+        if key in state["seen"]:
+            return None
+        state["seen"].add(key)
+        names = normalize_tools([tool])
+        name = names[0] if names else tool
+        detail = f" ({message[:160]})" if message else ""
+        if _tool_key(name) in BASELINE_TOOLS:
+            if CLAUDE_DENY_RULE_TEXT.search(message):
+                return None
+            state["baseline"] += 1
+            if max_baseline and state["baseline"] >= max_baseline:
+                return (f"permission denied: {name}: Claude Code denied baseline tools {state['baseline']} times{detail}; "
+                        "stopped instead of running to exit")
+            return None
+        if _tool_key(name) == "bash":
+            state["bash"] += 1
+            if max_bash and state["bash"] >= max_bash:
+                return f"permission denied: Bash: {state['bash']} Bash calls in a row were denied{detail}; stopped instead of running to exit"
+        return None
+
+    def check(line: bytes) -> str | None:
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(event, dict):
+            return None
+        if event.get("type") == "assistant":
+            for block in _claude_blocks(event, "tool_use"):
+                state["uses"][str(block.get("id"))] = str(block.get("name") or "tool")
+        elif event.get("type") == "system" and event.get("subtype") == "permission_denied":
+            key = str(event.get("tool_use_id"))
+            return judge(key, str(event.get("tool_name") or state["uses"].get(key, "tool")), str(event.get("message") or ""))
+        elif event.get("type") == "user":
+            for block in _claude_blocks(event, "tool_result"):
+                key, text = str(block.get("tool_use_id")), _block_text(block)
+                if block.get("is_error") and CLAUDE_DENIAL_TEXT.search(text):
+                    reason = judge(key, state["uses"].get(key, "tool"), text)
+                    if reason:
+                        return reason
+                elif not block.get("is_error") and _tool_key(state["uses"].get(key, "")) == "bash":
+                    state["bash"] = 0
+        return None
+
+    return check
+
+
 def provider_denials(agent: str, stdout: str) -> list[dict[str, str]]:
+    if agent == "claude":
+        stream = claude_stream_denials(stdout)
+        try:
+            value = claude_result(stdout)
+        except (TypeError, ValueError):
+            value = None
+        items = value.get("permission_denials") if isinstance(value, dict) else None
+        if not isinstance(items, list):
+            # An aborted run has no result event: the stream is the record.
+            return [{k: v for k, v in d.items() if k != "tool_use_id"} for d in stream]
+        by_id = {d["tool_use_id"]: d for d in stream}
+        denied = []
+        for item in items:
+            names = normalize_tools([_denial_name(item)])
+            if not names:
+                continue
+            tool_input = item.get("tool_input")
+            head = json.dumps(tool_input, ensure_ascii=False, separators=(",", ":")) if isinstance(tool_input, (dict, list)) else str(tool_input or "")
+            seen = by_id.get(str(item.get("tool_use_id"))) or {}
+            denied.append({"tool": names[0], "input_head": head[:120], **{k: seen[k] for k in ("reason_type", "message") if k in seen}})
+        return denied
     if agent == "opencode":
         return [{"tool": names[0], "input_head": item["input_head"]}
                 for item in opencode_denials(stdout) if (names := normalize_tools([item["tool"]]))]
@@ -2307,6 +2462,12 @@ def dispatch(
             task["session_key"] += ":" + pair_key(validate_pair(settings.get("model"), settings["reasoning_effort"])) + ":delegation=" + str(settings.get("allow_native_delegation", False)).lower()
     if "review" in task["role"].lower() and not task["write"]:
         review_task(config, task, store)
+    claude_settings = agent_settings(config, task) if task["agent"] == "claude" else {}
+    bash_limit = claude_settings.get("max_bash_denials", 6) if task["agent"] == "claude" else 0
+    baseline_limit = claude_settings.get("max_baseline_denials", 2) if task["agent"] == "claude" else 0
+    for name, value in (("max_bash_denials", bash_limit), ("max_baseline_denials", baseline_limit)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"claude.{name} must be a non-negative integer (0 disables)")
     run_dir = run_dir or store.create(task)
     store.event(run_dir, "run.started", {"agent": task["agent"], "write": task["write"]})
     started_at_ms = now_ms()
@@ -2399,7 +2560,8 @@ def dispatch(
                 timeout=effective_timeout,
                 stdout_path=stdout_path, stderr_path=stderr_path, label=label,
                 plain_output=task["agent"] == "grok" and metadata.get("output_format") == "plain",
-                abort_on=opencode_empty_step_guard(metadata["empty_step_limit"]) if metadata.get("empty_step_limit") else None,
+                abort_on=(opencode_empty_step_guard(metadata["empty_step_limit"]) if metadata.get("empty_step_limit") else
+                          claude_denial_guard(bash_limit, baseline_limit) if task["agent"] == "claude" else None),
             )
         exit_code, worker_stdout = completed.returncode, completed.stdout
         if metadata.get("execution_choice"):
