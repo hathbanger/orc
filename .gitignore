@@ -4,3 +4,4 @@ graphify-out/
 __pycache__/
 node_modules/
 .tenet/
+.claude/worktrees/

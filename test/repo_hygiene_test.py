@@ -18,6 +18,13 @@ class RepoHygieneTest(unittest.TestCase):
     def test_no_archives_are_committed(self):
         self.assertEqual([path for path in self.tracked() if path.lower().endswith((".zip", ".tar", ".tgz", ".tar.gz", ".7z"))], [])
 
+    def test_no_submodule_gitlinks_are_committed(self):
+        listing = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-s"], capture_output=True, text=True)
+        if listing.returncode != 0:
+            self.skipTest("not a git checkout")
+        self.assertEqual([line.split("\t", 1)[-1] for line in listing.stdout.splitlines() if line.startswith("160000 ")], [])
+        self.assertIn(".claude/worktrees/", (ROOT / ".gitignore").read_text().splitlines())
+
     def test_no_private_handoff_documents_are_committed(self):
         self.assertEqual([path for path in self.tracked() if HANDOFF.search(path)], [])
         self.assertTrue(HANDOFF.search("OASIS_DOGFOOD_RUN_2026-09-23.md"))
