@@ -277,14 +277,17 @@ machine configuration to:
 {"execution_mode": "yolo"}
 ```
 
-YOLO applies to leads, new and resumed workers, all workflow roles, and named
-routes. Codex gets `--dangerously-bypass-approvals-and-sandbox`; Claude, ORC
+YOLO applies to work that writes: leads, new and resumed workers, workflow
+roles and named routes that write. Codex gets `--dangerously-bypass-approvals-and-sandbox`; Claude, ORC
 routes, and AGY get `--dangerously-skip-permissions`; Grok gets
 `--permission-mode bypassPermissions --sandbox none --no-plan`. Claude's
 sandbox is disabled through invocation settings. AGY additionally requires
 `enableTerminalSandbox: false` in its native settings if it was enabled there.
-In YOLO, review/discovery scopes are worker instructions, not runtime read-only
-guarantees. Attempt limits, budgets, provider quotas, and acceptance checks
+A read-only task (`--read-only`, a read-only workflow node, a read-only lead)
+keeps its harness's read-only mode even in a YOLO workspace: Codex
+`-s read-only -a never`, Claude, AGY and Grok `plan`, OpenCode its read-only
+policy. Results and traces record the mode a run actually had
+(`execution_mode: restricted` for those). Attempt limits, budgets, provider quotas, and acceptance checks
 remain in effect. The UI shows the selected access mode and lets you override
 it per workspace under Settings → Runtime access.
 

@@ -161,10 +161,14 @@ class OpenCodeCommandTest(unittest.TestCase):
         self.assertEqual(policy["bash"]["git push*"], "deny")
 
     def test_yolo_auto_approves_and_replaces_shell_rules(self):
-        argv, env, _ = self.command(mode="yolo", model="xai/grok-4.5")
+        argv, env, _ = self.command(write=True, mode="yolo", model="xai/grok-4.5")
         self.assertIn("--auto", argv)
         policy = json.loads(env["OPENCODE_PERMISSION"])
         self.assertEqual((policy["*"], policy["bash"], policy["external_directory"]), ("allow", "allow", "allow"))
+        # A read-only task in a YOLO workspace keeps the reader's deny-by-default policy.
+        argv, env, _ = self.command(mode="yolo", model="xai/grok-4.5")
+        self.assertNotIn("--auto", argv)
+        self.assertNotEqual(json.loads(env["OPENCODE_PERMISSION"])["*"], "allow")
 
     def test_effort_is_a_variant_and_session_resumes(self):
         config = core.deep_merge(core.DEFAULTS, {"opencode": {"model": "anthropic/claude-opus-5-5", "reasoning_effort": "max"}})

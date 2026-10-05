@@ -281,7 +281,10 @@ def route_candidates(config, task, store, rejected=None, quota_audit=None, minim
         family = (core.lane_key(agent, settings), settings.get("command", agent), settings.get("model") or span.get("model") or "*")
         if key not in seen and 0 <= time.time() * 1000 - span.get("end_time_ms", 0) < core.LANE_COOLDOWN_SECONDS * 1000:
             if span.get("failure_class") == "quota" or (span.get("failure_class") == "permission_denied"
-                                                        and span.get("execution_mode", "restricted") == core.execution_mode(config)
+                                                        # A denial under full access predicts one under restricted
+                                                        # access, not the other way round.
+                                                        and not (core.task_execution_mode(config, task) == "yolo"
+                                                                 and span.get("execution_mode", "restricted") == "restricted")
                                                         and core.denial_blocks_lane(span)):
                 unhealthy.add(key)
                 # Quota belongs to the account behind the command, so every lane on
