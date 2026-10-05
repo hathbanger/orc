@@ -138,6 +138,20 @@ must be a list of route names; anything else is an error. See
 {"decisions": {"auto_routes": ["claude-opus-high", "claude-fable-high"], "write_trials": ["claude-fable-high"]}}
 ```
 
+`decisions.max_rejections_per_issue` caps blind retries per role:
+`{"suite-author": 2}` refuses a third `suite-author` delegation for an issue
+(`fusion delegate --issue owner/repo#N`) once two of that role's runs on the
+issue were rejected. A run counts when its latest measured outcome is a
+rejection, so a withdrawn or later-accepted verdict doesn't. The refusal is
+`status: capped` (exit 4) with the earlier rejection reasons, and no worker
+starts; `fusion decisions routing-report` lists refusals under `capped`.
+`--override-cap "<reason>"` runs once and logs a `cap_override` event. Unset (the
+default), nothing is capped; a role not listed is never capped.
+
+```json
+{"decisions": {"max_rejections_per_issue": {"suite-author": 2}}}
+```
+
 An agent or route may declare capabilities it `lacks`, as a list of names. A
 task that `--needs` one of them (CLI `fusion delegate --needs local_server`,
 MCP `needs`) skips that lane during automatic routing, with the reason

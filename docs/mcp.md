@@ -168,6 +168,10 @@ Delegate a bounded task to the other coding agent and receive a structured hando
       },
       "type": "array"
     },
+    "override_cap": {
+      "description": "A reason to run once past decisions.max_rejections_per_issue; logged.",
+      "type": "string"
+    },
     "reasoning_effort": {
       "description": "Codex, or Claude Code (low-max); requires model.",
       "enum": [

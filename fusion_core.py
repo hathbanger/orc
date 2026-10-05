@@ -2361,6 +2361,48 @@ REJECTION_CLASSES = ("suite_red", "no_diff", "out_of_scope", "eval_unmeasured", 
 ISSUE_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+")
 
 
+def rejection_cap(config: dict[str, Any], task: dict[str, Any], store: "RunStore") -> dict[str, Any] | None:
+    """The capped result for a task whose (issue, role) already has
+    `decisions.max_rejections_per_issue[role]` rejections, or None.
+
+    Opt-in per role: a global cap would refuse implementation work that
+    legitimately needs several rounds. A rejection counts when it is the run's
+    latest measured outcome (a withdrawn or later-accepted verdict doesn't).
+    `task["override_cap"]` (a reason) runs once and is logged as cap_override."""
+    from fusion_decisions import DecisionStore, normalize_role, read_jsonl
+    from fusion_policy import effective_outcomes
+    limits = (config.get("decisions") or {}).get("max_rejections_per_issue")
+    if limits is None:
+        return None
+    if not isinstance(limits, dict) or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 1
+                                               for k, v in limits.items()):
+        raise ValueError("decisions.max_rejections_per_issue must map role names to positive integers")
+    role, issue = normalize_role(task.get("role")), task.get("issue")
+    limit = next((v for k, v in limits.items() if normalize_role(k) == role), None)
+    if not issue or not role or limit is None:
+        return None
+    decisions = DecisionStore(store.workspace)
+    roles = {span.get("run_id"): span.get("role") for span in store.traces(limit=5000)}
+    rejected = [event for run, event in effective_outcomes(read_jsonl(decisions.path)).items()
+                if event.get("accepted") is False and event.get("issue") == issue
+                and normalize_role(event.get("role") or roles.get(run)) == role]
+    if len(rejected) < limit:
+        return None
+    if task.get("override_cap"):
+        decisions.append("cap_override", task_id=task.get("run_id"), issue=issue, role=role, rejections=len(rejected),
+                         limit=limit, reason=str(task["override_cap"])[:500])
+        return None
+    reasons = [event.get("reason") or "no reason recorded" for event in rejected]
+    decisions.append("routing_log", task_id=task.get("run_id"), scope="cap", reason="cap", issue=issue, role=role,
+                     rejections=len(rejected), limit=limit, chosen=None, write=bool(task.get("write")))
+    return {"schema": "fusion.result.v1", "run_id": task.get("run_id"), "workspace": task.get("workspace"), "status": "capped",
+            "agent": task.get("agent"), "route": task.get("route"), "role": role, "issue": issue,
+            "rejections": len(rejected), "limit": limit, "reasons": reasons,
+            "summary": f"{issue} already has {len(rejected)} rejected {role} runs (cap {limit}); no worker was started",
+            "blockers": [f"rejection cap: {reason}" for reason in reasons[-3:]],
+            "changed": [], "tests": [], "artifacts": {"run_dir": None}}
+
+
 def validate_issue(issue: Any) -> str | None:
     """A target issue as owner/repo#N, or None."""
     if issue is None or issue == "":
@@ -2420,7 +2462,7 @@ def record_outcome(workspace: Path, run_id: str, accepted: bool | None = None, r
     except (OSError, ValueError) as exc:
         raise ValueError(f"no completed Fusion run {run_id} in this workspace") from exc
     event = {"task_id": run_id, "group": result.get("trace_id") or run_id,
-             "status": result.get("status"), "source": "lead", "reason": str(reason)[:2000],
+             "status": result.get("status"), "source": "lead", "reason": str(reason)[:2000], "role": result.get("role"),
              "route": result.get("route"), "agent": result.get("agent"), "model": result.get("model"),
              "evidence": str(result_path)}
     if stage is not None:
@@ -2469,6 +2511,10 @@ def dispatch(
                                                   role=task.get("role"), write=bool(task.get("write")), chosen=None, control=pause)
             progress.emit(task.get("progress_label", task.get("role", "worker")), "paused by operator control; no worker started")
             return fusion_control.paused_result(task, pause)
+    capped = rejection_cap(config, task, store)
+    if capped:
+        progress.emit(task.get("progress_label", task.get("role", "worker")), capped["summary"])
+        return capped
     if store.control_workspace is not None:
         # A shared store must never resume another checkout's conversation.
         suffix = ":workspace=" + hashlib.sha256(task["workspace"].encode()).hexdigest()
@@ -2926,6 +2972,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "model": {"type": "string", "description": "Model for this task, overriding the route and agent settings."},
                     "reasoning_effort": {"type": "string", "enum": sorted(EFFORTS), "description": "Codex, or Claude Code (low-max); requires model."},
                     "issue": {"type": "string", "pattern": "^" + ISSUE_RE.pattern + "$", "description": "Target issue as owner/repo#N, recorded on the run."},
+                    "override_cap": {"type": "string", "description": "A reason to run once past decisions.max_rejections_per_issue; logged."},
                     "needs": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}, "description": "Capabilities the task needs from its lane, such as local_server; automatic routing skips lanes whose config `lacks` one."},
                 },
                 "required": ["agent", "task"],
@@ -3110,6 +3157,8 @@ def run_mcp(workspace: Path, config: dict[str, Any]) -> int:
                             raise ValueError("task is required")
                         if validate_issue(args.get("issue")):
                             task["issue"] = args["issue"]
+                        if args.get("override_cap"):
+                            task["override_cap"] = str(args["override_cap"])
                         payload = dispatch(target_config, task, target_store)
                     else:
                         target = workspace if name == "fusion_run_start" else store.workspace
@@ -3425,6 +3474,7 @@ def build_parser() -> argparse.ArgumentParser:
     delegate.add_argument("--success", action="append", default=[])
     delegate.add_argument("--constraint", action="append", default=[])
     delegate.add_argument("--issue", help="target issue as owner/repo#N; recorded on the run so outcomes and reports can count per issue")
+    delegate.add_argument("--override-cap", metavar="REASON", help="run once past decisions.max_rejections_per_issue; logged as cap_override")
     delegate.add_argument("task")
 
     outcome = sub.add_parser("outcome", help="record the lead's verdict on a delegated run",
@@ -3842,9 +3892,11 @@ def _main(args, parser) -> int:
                 task["issue"] = args.issue
         except ValueError as exc:
             parser.error(str(exc))
+        if args.override_cap:
+            task["override_cap"] = args.override_cap
         result = dispatch(config, task, RunStore(workspace))
         print_result(result, args.json)
-        return 0 if result["status"] == "success" else 2 if result["status"] == "paused_control" else 1
+        return 0 if result["status"] == "success" else 2 if result["status"] == "paused_control" else 4 if result["status"] == "capped" else 1
     parser.error("unknown command")
     return 2
 

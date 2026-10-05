@@ -323,6 +323,7 @@ usage: fusion delegate [-h] [--agent {auto,claude,codex,agy,grok,opencode}]
                        [--model MODEL]
                        [--reasoning-effort {high,low,max,medium,minimal,none,ultra,xhigh}]
                        [--success SUCCESS] [--constraint CONSTRAINT] [--issue ISSUE]
+                       [--override-cap REASON]
                        task
 
 positional arguments:
@@ -350,6 +351,8 @@ options:
   --constraint CONSTRAINT
   --issue ISSUE           target issue as owner/repo#N; recorded on the run so outcomes
                           and reports can count per issue
+  --override-cap REASON   run once past decisions.max_rejections_per_issue; logged as
+                          cap_override
 ```
 
 ## fusion outcome
