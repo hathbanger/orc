@@ -244,6 +244,24 @@ and writer locks for other checkouts live in the control store. Receipts remain
 available after a disposable worker checkout is removed. To inspect them later,
 use the same flag/env or run Fusion from the controller directory.
 
+## Operator pause
+
+`fusion control pause [--reason TEXT] [--until ISO]` stops new worker runs from
+every caller on the host: `fusion delegate`, workflow nodes and gym runs return
+`paused_control` (exit 2) without routing or starting a worker. Each refusal
+writes a routing-log row with `scope: control` and `reason: control`, so the
+record shows what was held back. Quota probes still run, so `fusion quota`
+keeps showing when accounts come back. A workflow paused this way ends
+`paused_control` with its nodes' attempts unspent, and `fusion workflow resume`
+continues it. `fusion control resume` clears the pause; `--until` ends it on its
+own. `fusion control status` (exit 2 while paused) shows the pause and every
+control file.
+
+The pause lives in `control.json` under ORC_HOME (`--scope host`, the default) or,
+for a shared control workspace, in `$FUSION_CONTROL_WORKSPACE/.fusion/control.json`
+(`--scope workspace`). Either one pausing is a pause, and a control file that
+can't be read pauses too. The file is `{"state": "pause" | "run", "reason", "until"}`.
+
 ## Runtime permissions
 
 Runtime access is configured with `execution_mode`: `restricted` (default) or
