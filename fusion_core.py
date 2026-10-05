@@ -257,6 +257,11 @@ def execution_mode(config: dict[str, Any]) -> str:
     return mode
 
 
+def task_execution_mode(config: dict[str, Any], task: dict[str, Any]) -> str:
+    """The access a run actually gets: YOLO applies to work that writes; a read-only task stays restricted."""
+    return "yolo" if execution_mode(config) == "yolo" and task.get("write") else "restricted"
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -1062,7 +1067,7 @@ class RunStore:
             "duration_ms": max(0, ended_at_ms - started_at_ms),
             "status": result.get("status"),
             "failure_class": failure_class(result),
-            "execution_mode": execution_mode(config),
+            "execution_mode": task_execution_mode(config, task),
             "agent": task["agent"],
             "role": task["role"],
             "route": task.get("route"),
@@ -2005,7 +2010,9 @@ def agent_command(
     settings = agent_settings(config, task)
     if settings.get("reasoning_effort") is not None and agent not in {"codex", "claude", "agy", "opencode"}:
         raise ValueError("reasoning_effort is currently supported only for native Codex, Claude Code, agy and OpenCode")
-    yolo = execution_mode(config) == "yolo"
+    # YOLO grants full access to work that writes. A read-only task keeps each
+    # harness's read-only mode even in a YOLO workspace: --read-only is a promise.
+    yolo = execution_mode(config) == "yolo" and bool(task.get("write"))
     env = os.environ.copy()
     if agent == "claude" and not metered(settings):
         # Claude Code prefers an API key over the subscription login whenever one
@@ -2307,7 +2314,7 @@ def dispatch(
     session_id_seen = session_id
     if store.control_workspace is not None:
         env["FUSION_CONTROL_WORKSPACE"] = str(store.control_workspace)
-    metadata["execution_mode"] = execution_mode(config)
+    metadata["execution_mode"] = task_execution_mode(config, task)
     resolved_settings = agent_settings(config, task)
     metadata["lane_key"] = lane_key(task["agent"], resolved_settings)
     # The requested effort, from the task, route or agent; null means the harness default.
@@ -2361,7 +2368,7 @@ def dispatch(
     exit_code = 1
     label = task.get("progress_label", task["role"])
     scope = "implementation" if task["write"] else "review/investigation only"
-    access = "YOLO: no runtime permission prompts or sandbox" if execution_mode(config) == "yolo" else "restricted runtime"
+    access = "YOLO: no runtime permission prompts or sandbox" if task_execution_mode(config, task) == "yolo" else "restricted runtime"
     requested = (metadata.get("execution_choice") or {}).get("requested") or {}
     selection = f"; requested {requested['model']} / {requested['reasoning_effort']} effort" if requested.get("reasoning_effort") else ""
     progress.emit(label, f"selected {task['agent']} ({task.get('route') or 'native'}){selection}; {scope}; {access}")
@@ -2479,7 +2486,7 @@ def dispatch(
         "run_id": task["run_id"],
         "workspace": task["workspace"],
         "status": status,
-        "execution_mode": execution_mode(config),
+        "execution_mode": task_execution_mode(config, task),
         "agent": task["agent"],
         "role": task["role"],
         "route": task.get("route"),
@@ -2947,7 +2954,7 @@ def mcp_config_file(workspace: Path, read_only: bool = False) -> tuple[tempfile.
 
 def launch_lead(workspace: Path, config: dict[str, Any], agent: str, task: str | None, interactive: bool = True, read_only: bool = False) -> int:
     control = selected_control_workspace()
-    yolo = execution_mode(config) == "yolo"
+    yolo = execution_mode(config) == "yolo" and not read_only
     if agent == "claude":
         settings = config["claude"]
         command = executable(settings.get("command", "claude"))

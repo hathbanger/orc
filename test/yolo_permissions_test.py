@@ -28,9 +28,20 @@ class YoloPermissionsTest(unittest.TestCase):
     def task(self, agent, write):
         return core.make_task(self.workspace, agent, "Check the fixture", "review", [], [], None, True, write)
 
-    def test_all_workers_use_full_access_for_read_write_and_resumed_tasks(self):
+    def test_read_only_tasks_keep_their_read_only_mode_in_a_yolo_workspace(self):
+        expected = {"codex": ("-s", "read-only"), "claude": ("--permission-mode", "plan"), "agy": ("--mode", "plan"),
+                    "grok": ("--permission-mode", "plan")}
+        for agent, (flag, value) in expected.items():
+            for session in (None, "prior-session"):
+                with self.subTest(agent=agent, resumed=bool(session)):
+                    argv, _, _ = core.agent_command(self.config, self.task(agent, False), session)
+                    self.assertEqual(argv[argv.index(flag) + 1], value)
+                    for dangerous in ("--dangerously-bypass-approvals-and-sandbox", "--dangerously-skip-permissions", "bypassPermissions"):
+                        self.assertNotIn(dangerous, argv)
+
+    def test_all_workers_use_full_access_for_writing_and_resumed_tasks(self):
         for agent in ("codex", "claude", "agy", "grok"):
-            for write in (False, True):
+            for write in (True,):
                 for session in (None, "prior-session"):
                     with self.subTest(agent=agent, write=write, resumed=bool(session)):
                         task = self.task(agent, write)
@@ -58,7 +69,7 @@ class YoloPermissionsTest(unittest.TestCase):
 
     def test_orc_route_cannot_reintroduce_a_saved_plan_mode(self):
         self.config["routes"] = {"external": {"agent":"claude", "command":"orc", "profile":"reviewer", "model":"provider/model", "permission_mode":"plan"}}
-        task = self.task("claude", False)
+        task = self.task("claude", True)
         task["route"] = "external"
         argv, env, _ = core.agent_command(self.config, task, "existing")
         self.assertIn("@reviewer", argv)
@@ -75,9 +86,15 @@ class YoloPermissionsTest(unittest.TestCase):
                     with self.subTest(agent=agent, interactive=interactive, read_only=read_only), patch.object(core.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
                         core.launch_lead(self.workspace, self.config, agent, "Check fixture", interactive, read_only)
                         argv = run.call_args.args[0]
-                        self.assertIn("--dangerously-bypass-approvals-and-sandbox" if agent == "codex" else "--dangerously-skip-permissions", argv)
-                        self.assertNotIn("plan", argv)
-                        self.assertNotIn("-s", argv)
+                        dangerous = "--dangerously-bypass-approvals-and-sandbox" if agent == "codex" else "--dangerously-skip-permissions"
+                        if read_only:
+                            # A read-only lead stays read-only even in a YOLO workspace.
+                            self.assertNotIn(dangerous, argv)
+                            self.assertIn("read-only" if agent == "codex" else "plan", argv)
+                        else:
+                            self.assertIn(dangerous, argv)
+                            self.assertNotIn("plan", argv)
+                            self.assertNotIn("-s", argv)
 
     def test_machine_default_applies_across_workspaces_and_project_can_override(self):
         home = Path(os.environ["ORC_HOME"])
@@ -112,13 +129,26 @@ print(json.dumps({'status':'SUCCESS','response':'STATUS: success\\nSUMMARY: chec
 ''')
         worker.chmod(0o755)
         self.config["agy"]["command"] = str(worker)
-        task = self.task("agy", False)
+        task = self.task("agy", True)
         result = core.dispatch(self.config, task, core.RunStore(self.workspace))
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["execution_mode"], "yolo")
-        self.assertFalse(task["write"])
+        self.assertTrue(task["write"])
         saved = json.loads(Path(result["artifacts"]["run_dir"], "task.json").read_text())
         self.assertEqual(saved["resolved"]["execution_mode"], "yolo")
+
+    def test_a_read_only_dispatch_in_a_yolo_workspace_runs_and_records_restricted(self):
+        worker = self.root / "agy-readonly-fixture"
+        worker.write_text(f"#!{sys.executable}\n" + '''import json, sys
+assert '--dangerously-skip-permissions' not in sys.argv
+assert sys.argv[sys.argv.index('--mode') + 1] == 'plan'
+print(json.dumps({'status':'SUCCESS','response':'STATUS: success\\nSUMMARY: checked\\nTESTS: none\\nBLOCKERS: none'}))
+''')
+        worker.chmod(0o755)
+        self.config["agy"]["command"] = str(worker)
+        result = core.dispatch(self.config, self.task("agy", False), core.RunStore(self.workspace))
+        self.assertEqual(result["status"], "success", result.get("blockers"))
+        self.assertEqual(result["execution_mode"], "restricted")
 
 
 if __name__ == "__main__":
