@@ -29,6 +29,7 @@ after its name. Aliases and hidden subcommands are included below.
 - [fusion workflow report](#fusion-workflow-report)
 - [fusion workflow watch](#fusion-workflow-watch)
 - [fusion doctor](#fusion-doctor)
+- [fusion route](#fusion-route)
 - [fusion status](#fusion-status)
 - [fusion runs](#fusion-runs)
 - [fusion trace](#fusion-trace)
@@ -80,12 +81,12 @@ after its name. Aliases and hidden subcommands are included below.
 ```text
 usage: fusion [-h] [--workspace WORKSPACE] [--control-workspace CONTROL_WORKSPACE]
               [--json] [--progress | --quiet]
-              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,control,telemetry,decisions,learn,gym,quota,mcp-serve} ...
+              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,route,status,runs,trace,usage,control,telemetry,decisions,learn,gym,quota,mcp-serve} ...
 
 Lead/sidekick orchestration for Claude Code, Codex CLI, and Antigravity CLI
 
 positional arguments:
-  {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,control,telemetry,decisions,learn,gym,quota,mcp-serve}
+  {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,route,status,runs,trace,usage,control,telemetry,decisions,learn,gym,quota,mcp-serve}
     truffle               scout tractable GitHub issues and queue isolated fixes
     ui                    open the local ORC/Fusion control room in your browser
     lead                  launch an interactive lead agent with the Fusion MCP server
@@ -98,6 +99,8 @@ positional arguments:
                           pipeline
     workflow              run a persisted bounded Fusion DAG
     doctor                check the local CLI prerequisites
+    route                 preview automatic routing for a task shape; logs and
+                          dispatches nothing
     status (runs)         show recent runs
     trace                 show recent telemetry spans
     usage                 show local ORC, Claude and Codex usage and quota
@@ -562,6 +565,23 @@ usage: fusion doctor [-h]
 
 options:
   -h, --help  show this help message and exit
+```
+
+## fusion route
+
+preview automatic routing for a task shape; logs and dispatches nothing
+
+```text
+usage: fusion route [-h] --explain [--write] [--role ROLE] [--needs NAME] [--seed SEED]
+
+options:
+  -h, --help    show this help message and exit
+  --explain     print the ranked candidates, dropped lanes with reasons, quota classes
+                and propensities
+  --write       a task that writes (default: read-only)
+  --role ROLE
+  --needs NAME  a capability the task needs from its lane (repeatable)
+  --seed SEED   seed for Thompson draws, so a preview is reproducible
 ```
 
 ## fusion status

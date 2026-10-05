@@ -3532,6 +3532,14 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_watch.add_argument("--once", action="store_true", help="show a snapshot and exit")
 
     sub.add_parser("doctor", help="check the local CLI prerequisites")
+    route = sub.add_parser("route", help="preview automatic routing for a task shape; logs and dispatches nothing")
+    route.add_argument("--explain", action="store_true", required=True,
+                       help="print the ranked candidates, dropped lanes with reasons, quota classes and propensities")
+    route.add_argument("--write", action="store_true", help="a task that writes (default: read-only)")
+    route.add_argument("--role", default="implementation")
+    route.add_argument("--needs", action="append", type=cli_need, default=[], metavar="NAME",
+                       help="a capability the task needs from its lane (repeatable)")
+    route.add_argument("--seed", type=int, help="seed for Thompson draws, so a preview is reproducible")
     status = sub.add_parser("status", aliases=["runs"], help="show recent runs")
     status.add_argument("--limit", type=int, default=20)
     trace = sub.add_parser("trace", help="show recent telemetry spans")
@@ -3654,6 +3662,23 @@ def _main(args, parser) -> int:
             parser.error(str(exc))
     if args.command == "mcp-serve":
         return run_mcp(workspace, config)
+    if args.command == "route":
+        from fusion_policy import explain_route
+        task = make_task(workspace, "auto", "routing preview", args.role, [], [], None, False, args.write, needs=args.needs)
+        try:
+            payload = explain_route(config, task, RunStore(workspace), args.seed)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.json:
+            print(json_text(payload))
+        else:
+            print(f"chosen: {payload['chosen'] or 'none'}" + (f" — {payload['no_route']}" if payload.get("no_route") else ""))
+            for candidate in payload["candidates"]:
+                print(f"  {candidate['key']:<28} p={candidate['propensity']:.3f}  quota={candidate.get('quota') or '-'}  "
+                      f"checked={candidate.get('checked_runs_local', candidate.get('checked_runs'))}")
+            for key, why in sorted(payload["rejected"].items()):
+                print(f"  dropped {key}: {why}")
+        return 0 if payload["chosen"] else 1
     if args.command == "doctor":
         return doctor(workspace, config)
     if args.command in {"status", "runs"}:

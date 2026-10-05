@@ -768,6 +768,78 @@ def quota_twin(config, task, store):
             "reasoning_effort": effort, "reason": reason}
 
 
+def rank_automatic(config, task, store, rng=None, rejected=None, quota_audit=None):
+    """The ranked automatic candidates for `task`, before any Laya advice or epsilon draw.
+
+    Shared by route_task and `fusion route --explain`, so the preview can't drift
+    from what routing does. Reads the store; writes nothing."""
+    import fusion_core as core
+    ranking = config.get("decisions", {}).get("rank_by_outcomes")
+    cache = core.cache_settings(config)
+    warm_epsilon = cache["warm_epsilon"] if cache["configured"] else None
+    cost_epsilon = config.get("decisions", {}).get("cost_epsilon", 0.05)
+    sampling = bool(ranking and gating(task) and gating_policy(config) == "thompson")
+    minimum = explore = trial = sampled = None
+    needs_unmet = False
+    candidates = route_candidates(config, task, store, rejected=rejected, quota_audit=quota_audit, pool_models=sampling)
+    if not candidates and task.get("needs"):
+        # No lane can meet the needs: run blind on the full pool rather than refuse the work.
+        needs_unmet = True
+        candidates = route_candidates(config, {**task, "needs": []}, store, rejected=rejected, quota_audit=quota_audit,
+                                      pool_models=sampling)
+    if ranking:
+        minimum, explore = exploration(ranking, task, candidates)
+        candidates = rank_by_outcomes(candidates, minimum, warm_epsilon, explore, cost_epsilon)
+        if task.get("prefer_different_agent"):
+            # Independence outranks track record: a review stays with a
+            # different harness than the implementer when one is available.
+            candidates.sort(key=lambda item: item["agent"] == task["prefer_different_agent"])
+    candidates = rank_by_quota(candidates)
+    if sampling and len(candidates) > 1:
+        # Sampling decides over time; write_trials is superseded.
+        candidates, sampled = thompson(candidates, task, rng or ROUTING_RNG)
+    elif not sampling:
+        candidates, trial = write_trial(config, task, candidates, minimum or (
+            int(ranking) if ranking and not isinstance(ranking, bool) else 3))
+    return {"candidates": candidates, "minimum": minimum, "explore": explore, "trial": trial, "sampled": sampled,
+            "needs_unmet": needs_unmet, "sampling": sampling}
+
+
+def explain_route(config, task, store, seed=None):
+    """What automatic routing would choose for `task` now, and why; dispatches and logs nothing.
+
+    The same ranking as route_task (rank_automatic). Thompson draws use `seed`, so
+    a preview is reproducible. The chosen lane is the ranked top: a qualified Laya
+    recommendation or an epsilon draw (read-only work) could still change it."""
+    rejected, quota_audit = {}, {}
+    ranked = rank_automatic(config, task, store, random.Random(seed), rejected, quota_audit)
+    candidates = ranked["candidates"][:8]
+    keys = [c["key"] for c in candidates]
+    epsilon = routing_epsilon(config)
+    effective = epsilon if not gating(task) and not task.get("prefer_different_agent") and len(candidates) > 1 else 0.0
+    if ranked["sampled"]:
+        wins = {f["lead"]: f["p_win"] for f in ranked["sampled"]["families"]}
+        chances = {key: wins.get(key, 0.0) for key in keys}
+    else:
+        chances = propensities(keys, keys[0], 0.0 if ranked["trial"] else effective) if keys else {}
+    fields = ("key", "agent", "route", "model", "reasoning_effort", "cost_tier", "checked_runs", "checked_runs_local",
+              "acceptance_rate", "acceptance_rate_local", "evidence_scope", "pooled", "mean_cost_usd")
+    return {"schema": "fusion.route_explain.v1",
+            "task": {"role": task.get("role"), "write": bool(task.get("write")), "needs": task.get("needs") or [],
+                     "gating": gating(task)},
+            "chosen": keys[0] if keys else None,
+            "candidates": [{**{f: c.get(f) for f in fields if f in c}, "propensity": chances.get(c["key"], 0.0),
+                            "quota": (c.get("quota") or {}).get("classification")} for c in candidates],
+            "rejected": rejected,
+            "quota": {key: {"classification": q.get("classification"), "reasons": q.get("reasons")} for key, q in quota_audit.items()},
+            "policy": {"rank_by_outcomes": ranked["minimum"], "explore": ranked["explore"], "gating_policy": gating_policy(config),
+                       "epsilon": effective, "routing_epsilon": epsilon, "seed": seed},
+            **({"sampled": ranked["sampled"]} if ranked["sampled"] else {}),
+            **({"write_trial": ranked["trial"]} if ranked["trial"] else {}),
+            **({"needs_unmet": True} if ranked["needs_unmet"] else {}),
+            **({"no_route": no_route_reason(config, task, store)} if not keys else {})}
+
+
 def route_task(config, task, store, rng=None):
     """Record advice for explicit routing, apply only to a genuinely automatic lane.
 
@@ -805,26 +877,9 @@ def route_task(config, task, store, rng=None):
         needs_unmet = False
         sampling = bool(automatic and ranking and gating(task) and gating_policy(config) == "thompson")
         if automatic:
-            candidates = route_candidates(config, task, store, rejected=rejected, quota_audit=quota_audit, pool_models=sampling)
-            if not candidates and task.get("needs"):
-                # No lane can meet the needs: run blind on the full pool rather than refuse the work.
-                needs_unmet = True
-                candidates = route_candidates(config, {**task, "needs": []}, store, rejected=rejected, quota_audit=quota_audit,
-                                              pool_models=sampling)
-            if ranking:
-                minimum, explore = exploration(ranking, task, candidates)
-                candidates = rank_by_outcomes(candidates, minimum, warm_epsilon, explore, cost_epsilon)
-                if task.get("prefer_different_agent"):
-                    # Independence outranks track record: a review stays with a
-                    # different harness than the implementer when one is available.
-                    candidates.sort(key=lambda item: item["agent"] == task["prefer_different_agent"])
-            candidates = rank_by_quota(candidates)
-            if sampling and len(candidates) > 1:
-                # Sampling decides over time; write_trials is superseded.
-                candidates, sampled = thompson(candidates, task, rng or ROUTING_RNG)
-            elif not sampling:
-                candidates, trial = write_trial(config, task, candidates, minimum or (
-                    int(ranking) if ranking and not isinstance(ranking, bool) else 3))
+            ranked = rank_automatic(config, task, store, rng, rejected, quota_audit)
+            candidates, minimum, explore = ranked["candidates"], ranked["minimum"], ranked["explore"]
+            trial, sampled, needs_unmet = ranked["trial"], ranked["sampled"], ranked["needs_unmet"]
         else:
             from fusion_reasoning import pair_candidates, pair_key
             settings = core.agent_settings(config, task)
