@@ -210,7 +210,12 @@ existing order.
 Explicit routes stay pinned to their model and effort; when the pinned account
 is exhausted they move to a same-model overflow route (`quota_twin`). Existing
 authorized exploration still applies.
-Quota-free traces do not erase an earlier observation, and observations without
+Quota-free traces do not erase an earlier observation, and neither does a reading
+that carries fewer windows: windows merge per name, each keeping its newest
+reading and its own `observed_at`, so an older weekly window near its limit still
+excludes the lane after a newer reading reports only the five-hour window. A window
+whose reset has passed no longer constrains routing. The account's status (and a
+rejection's window) comes from its newest reading. Observations without
 a recorded lane key cannot constrain unrelated accounts. Routing logs and
 `fusion decisions routing-report` include quota windows, classifications,
 thresholds, and reasons for demotions and exclusions, even before an outcome

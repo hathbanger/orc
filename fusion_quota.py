@@ -64,7 +64,8 @@ def status(config, store, now=None):
         for name, window in assessed["windows"].items():
             reset = usage.timestamp(window.get("resets_at"))
             windows[name] = {"used": window.get("used"), "resets_at": usage.iso(reset) if reset else None,
-                             "active": window["active"], "elapsed": round(window["elapsed"], 3) if window.get("elapsed") is not None else None}
+                             "active": window["active"], "elapsed": round(window["elapsed"], 3) if window.get("elapsed") is not None else None,
+                             "observed_at": window.get("observed_at")}
         accounts.append({"lane_key": entry["lane_key"], "provider": entry.get("provider"), "lanes": lanes_for(config, entry["lane_key"]),
                          "classification": assessed["classification"], "reasons": assessed["reasons"], "status": assessed["status"],
                          "observed_at": entry.get("observed_at"),

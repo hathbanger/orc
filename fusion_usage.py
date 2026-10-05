@@ -317,8 +317,20 @@ def headroom(workspace=None, *, codex_home=None, include_raw=True):
                               "window_minutes": window.get("window_minutes"), "resets_at": window["resets_at"]})
         observe(provider, lane, windows, when, source)
         entry = accounts[provider, lane]
+        # A reading may carry only some windows (Claude reports the windows its
+        # last rate-limit event named), so windows merge per name, newest
+        # reading of each, with its own observed_at. A window past its reset
+        # stays: routing treats it as inactive and probe_due still needs it.
+        # The status (and a rejection's window) is the newest reading's.
+        merged = entry.setdefault("_windows", {})
+        for name, window in quota["windows"].items():
+            old = merged.get(name)
+            if old is None or timestamp(old["observed_at"]) <= when:
+                merged[name] = {**window, "observed_at": iso(when)}
         if not entry.get("observed_at") or timestamp(entry["observed_at"]) <= when:
-            entry.update(lane_key=lane, quota=quota, observed_at=iso(when), source=str(source))
+            entry.update(lane_key=lane, observed_at=iso(when), source=str(source),
+                         _newest={key: value for key, value in quota.items() if key != "windows"})
+        entry["quota"] = {**entry["_newest"], "windows": dict(merged)}
 
     ledger = Path(workspace or Path.cwd()) / ".fusion" / "traces.jsonl"
     for trace in json_lines(ledger):
@@ -380,6 +392,8 @@ def headroom(workspace=None, *, codex_home=None, include_raw=True):
     output = []
     for key in sorted(accounts, key=lambda key: (key[0], key[1] or "")):
         entry = accounts[key]
+        entry.pop("_windows", None)
+        entry.pop("_newest", None)
         entry["status"] = "known" if any(entry["windows"].values()) else "unknown"
         output.append(entry)
     return output
