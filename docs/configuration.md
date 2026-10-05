@@ -293,13 +293,18 @@ per-port rule. `ps` stays denied inside the sandbox.
 
 ### Claude denial guard
 
-A Claude worker that Claude Code denies a baseline tool (Read, Edit, Write and
-the like) is stopped at that denial (exit 125) instead of running on to an
-error result. Bash denials stop it once `claude.max_bash_denials` (default `6`;
-`0` disables) come in a row; a successful Bash call resets the count, so a worker
-that works around a denied command keeps going. Each `denied` entry in the result
-records Claude Code's `reason_type` (its `decision_reason_type`, for example
-`subcommandResults`) and `message` when the stream carries them.
+A Claude worker that Claude Code keeps refusing is stopped (exit 125) instead of
+running on to an error result. Baseline-tool denials (Read, Edit, Write and the
+like) stop it once `claude.max_baseline_denials` (default `2`) have happened; a
+deny rule refusing a protected path ("denied by your permission settings") is
+policy working as configured, so it is recorded but never counts. Bash denials
+stop it once `claude.max_bash_denials` (default `6`) come in a row; a successful
+Bash call resets that count, so a worker that works around a denied command keeps
+going. `0` disables either limit. A denial is Claude Code's `permission_denied`
+event or a tool result that opens with its own refusal wording, never a command's
+output that merely mentions one. Each `denied` entry in the result records Claude
+Code's `reason_type` (its `decision_reason_type`, for example `asyncAgent` for a
+command that needed approval nobody could give) and `message`.
 
 ## Antigravity settings
 

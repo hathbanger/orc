@@ -129,6 +129,7 @@ DEFAULTS: dict[str, Any] = {
         "model": "",
         "allowed_tools": [],
         "max_bash_denials": 6,
+        "max_baseline_denials": 2,
     },
     "agy": {
         "command": "agy",
@@ -695,10 +696,15 @@ def _denial_name(item: Any) -> str | None:
     return str(name) if name else None
 
 
-# Claude Code's own wording when it refuses a tool call (not a command's own
-# "Permission denied" output, which is just a failed command).
-CLAUDE_DENIAL_TEXT = re.compile(r"has been denied|denied by your permission settings|permission request denied|"
-                                r"tool use was denied|requires approval", re.IGNORECASE)
+# Claude Code's own wording when it refuses a tool call, anchored to the start of
+# the tool result: a failed command's output that merely contains such a phrase
+# (or says "Permission denied") is not a denial.
+CLAUDE_DENIAL_TEXT = re.compile(r"\A\s*(?:<tool_use_error>\s*)?(?:Permission to use \S+.* has been denied|"
+                                r"Permission for this tool use was denied|"
+                                r"File is in a directory that is denied by your permission settings)", re.IGNORECASE | re.DOTALL)
+# A deny rule refusing a protected path is policy working as configured, not a
+# lane that can't do its job; it is recorded but never stops a run.
+CLAUDE_DENY_RULE_TEXT = re.compile(r"denied by your permission settings", re.IGNORECASE)
 
 
 def _claude_events(stdout: str):
@@ -761,14 +767,15 @@ def claude_stream_denials(stdout: str) -> list[dict[str, str]]:
     return result
 
 
-def claude_denial_guard(max_bash: int):
+def claude_denial_guard(max_bash: int, max_baseline: int = 2):
     """Stop a Claude run that can't do its job instead of letting it run to exit.
 
-    The first denial of a baseline tool (Read, Edit, Write ...) stops it: the
-    result would be an error anyway. Bash denials stop it once `max_bash`
-    come in a row; a successful Bash call in between resets the count, so a
-    worker that works around a denied command keeps going (0 disables)."""
-    state = {"uses": {}, "seen": set(), "bash": 0}
+    Baseline-tool denials (Read, Edit, Write ...) stop it once `max_baseline`
+    happened; a deny rule on a protected path never counts (that is policy
+    working). Bash denials stop it once `max_bash` come in a row; a successful
+    Bash call in between resets the count, so a worker that works around a
+    denied command keeps going. 0 disables either limit."""
+    state = {"uses": {}, "seen": set(), "bash": 0, "baseline": 0}
 
     def judge(key: str, tool: str, message: str) -> str | None:
         if key in state["seen"]:
@@ -778,7 +785,13 @@ def claude_denial_guard(max_bash: int):
         name = names[0] if names else tool
         detail = f" ({message[:160]})" if message else ""
         if _tool_key(name) in BASELINE_TOOLS:
-            return f"permission denied: {name}: Claude Code denied a baseline tool{detail}; stopped instead of running to exit"
+            if CLAUDE_DENY_RULE_TEXT.search(message):
+                return None
+            state["baseline"] += 1
+            if max_baseline and state["baseline"] >= max_baseline:
+                return (f"permission denied: {name}: Claude Code denied baseline tools {state['baseline']} times{detail}; "
+                        "stopped instead of running to exit")
+            return None
         if _tool_key(name) == "bash":
             state["bash"] += 1
             if max_bash and state["bash"] >= max_bash:
@@ -2431,9 +2444,12 @@ def dispatch(
             task["session_key"] += ":" + pair_key(validate_pair(settings.get("model"), settings["reasoning_effort"])) + ":delegation=" + str(settings.get("allow_native_delegation", False)).lower()
     if "review" in task["role"].lower() and not task["write"]:
         review_task(config, task, store)
-    bash_limit = agent_settings(config, task).get("max_bash_denials", 6) if task["agent"] == "claude" else 0
-    if isinstance(bash_limit, bool) or not isinstance(bash_limit, int) or bash_limit < 0:
-        raise ValueError("claude.max_bash_denials must be a non-negative integer (0 disables)")
+    claude_settings = agent_settings(config, task) if task["agent"] == "claude" else {}
+    bash_limit = claude_settings.get("max_bash_denials", 6) if task["agent"] == "claude" else 0
+    baseline_limit = claude_settings.get("max_baseline_denials", 2) if task["agent"] == "claude" else 0
+    for name, value in (("max_bash_denials", bash_limit), ("max_baseline_denials", baseline_limit)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"claude.{name} must be a non-negative integer (0 disables)")
     run_dir = run_dir or store.create(task)
     store.event(run_dir, "run.started", {"agent": task["agent"], "write": task["write"]})
     started_at_ms = now_ms()
@@ -2527,7 +2543,7 @@ def dispatch(
                 stdout_path=stdout_path, stderr_path=stderr_path, label=label,
                 plain_output=task["agent"] == "grok" and metadata.get("output_format") == "plain",
                 abort_on=(opencode_empty_step_guard(metadata["empty_step_limit"]) if metadata.get("empty_step_limit") else
-                          claude_denial_guard(bash_limit) if task["agent"] == "claude" else None),
+                          claude_denial_guard(bash_limit, baseline_limit) if task["agent"] == "claude" else None),
             )
         exit_code, worker_stdout = completed.returncode, completed.stdout
         if metadata.get("execution_choice"):

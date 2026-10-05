@@ -35,6 +35,22 @@ def bash_success(n):
     return [use, done]
 
 
+APPROVAL = ("Permission for this tool use was denied. It requires approval, and this session has no approval surface "
+            "\u2014 nobody can answer a permission prompt here \u2014 so it was denied automatically.")
+
+
+def read_needing_approval(n):
+    """A Read refused because it needed approval, in the shape of a real headless (asyncAgent) denial."""
+    use = {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": f"toolu_read_{n}", "name": "Read", "input": {"file_path": f"/workspace/src/{n}.py"}}]}}
+    event = {"type": "system", "subtype": "permission_denied", "tool_name": "Read", "tool_use_id": f"toolu_read_{n}",
+             "decision_reason_type": "asyncAgent", "decision_reason": "no approval surface in this session; permission request denied automatically",
+             "message": APPROVAL}
+    done = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": f"toolu_read_{n}", "content": APPROVAL, "is_error": True}]}}
+    return [use, event, done]
+
+
 def result(denials):
     return {"type": "result", "subtype": "success", "is_error": False, "session_id": "s", "result": HANDOFF,
             "permission_denials": denials}
@@ -67,14 +83,38 @@ class ClaudeDenialGuardTest(unittest.TestCase):
         value = core.dispatch(config, task, core.RunStore(self.workspace))
         return value, time.monotonic() - started
 
-    def test_a_baseline_tool_denial_stops_the_run_at_once(self):
-        value, elapsed = self.run_stream(fixture("claude_denial_read.jsonl"))
+    def test_baseline_denials_needing_approval_stop_the_run_at_the_limit(self):
+        init = fixture("claude_denial_bash.jsonl")[0]
+        value, elapsed = self.run_stream([init, *read_needing_approval(0), *read_needing_approval(1)])
         self.assertLess(elapsed, 20)
         self.assertEqual((value["status"], value["exit_code"]), ("error", 125))
         self.assertEqual(core.failure_class(value), "permission_denied")
         self.assertIn("Read", value["denied_tools"])
+        self.assertEqual([d["reason_type"] for d in value["denied"]], ["asyncAgent", "asyncAgent"])
+
+    def test_one_baseline_denial_does_not_stop_the_run(self):
+        init = fixture("claude_denial_bash.jsonl")[0]
+        events = [init, *read_needing_approval(0), result([{"tool_name": "Read", "tool_use_id": "toolu_read_0", "tool_input": {}}])]
+        value, _ = self.run_stream(events, hang=False)
+        self.assertNotEqual(value["exit_code"], 125)
+
+    def test_a_deny_rule_on_a_protected_path_is_recorded_but_never_stops_the_run(self):
+        read = fixture("claude_denial_read.jsonl")
+        denial = {"tool_name": "Read", "tool_use_id": "toolu_01QYYWDHagb76pn1Yx124m2q", "tool_input": {}}
+        value, _ = self.run_stream([*read, *read[1:], result([denial])], hang=False)
+        self.assertNotEqual(value["exit_code"], 125)
         self.assertEqual(value["denied"][0]["tool"], "Read")
         self.assertIn("denied by your permission settings", value["denied"][0]["message"])
+
+    def test_command_output_that_mentions_approval_is_not_a_denial(self):
+        init = fixture("claude_denial_bash.jsonl")[0]
+        use = {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_test", "name": "Bash", "input": {"command": "npm test"}}]}}
+        failed = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_test", "is_error": True,
+             "content": "FAIL test/guard.test.ts: expected 'requires approval' and 'has been denied' to be reported"}]}}
+        value, _ = self.run_stream([init, use, failed, result([])], hang=False)
+        self.assertEqual(value["denied"], [])
 
     def test_a_worked_around_bash_denial_runs_to_its_handoff(self):
         denials = [{"tool_name": "Bash", "tool_use_id": f"toolu_bash_denied_{n}", "tool_input": {"command": "cat secret.txt"}}
