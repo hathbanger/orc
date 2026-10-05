@@ -330,7 +330,7 @@ def headroom(workspace=None, *, codex_home=None, include_raw=True):
         if not entry.get("observed_at") or timestamp(entry["observed_at"]) <= when:
             entry.update(lane_key=lane, observed_at=iso(when), source=str(source),
                          _newest={key: value for key, value in quota.items() if key != "windows"})
-        entry["quota"] = {**entry["_newest"], "windows": dict(merged)}
+        entry["quota"] = {**entry.get("_newest", {}), "windows": dict(merged)}
 
     ledger = Path(workspace or Path.cwd()) / ".fusion" / "traces.jsonl"
     for trace in json_lines(ledger):
