@@ -291,6 +291,16 @@ On macOS, `allow_local_binding` opens every localhost port, including other
 services on the host, not just the worker's own server; Codex offers no
 per-port rule. `ps` stays denied inside the sandbox.
 
+### Claude denial guard
+
+A Claude worker that Claude Code denies a baseline tool (Read, Edit, Write and
+the like) is stopped at that denial (exit 125) instead of running on to an
+error result. Bash denials stop it once `claude.max_bash_denials` (default `6`;
+`0` disables) come in a row; a successful Bash call resets the count, so a worker
+that works around a denied command keeps going. Each `denied` entry in the result
+records Claude Code's `reason_type` (its `decision_reason_type`, for example
+`subcommandResults`) and `message` when the stream carries them.
+
 ## Antigravity settings
 
 In restricted mode, Fusion launches `agy` with `--sandbox` and uses `plan` for
