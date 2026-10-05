@@ -137,15 +137,31 @@ def quota_settings(config):
     return settings
 
 
+def rejection_window(quota):
+    """The window a rejection belongs to, so it lasts until that window resets:
+    the window the provider named; else one at or past its limit; else one
+    whose usage is unknown (a rejected window may not report a number); else
+    the most-used. Ties go to the earliest reset."""
+    timed = {name: window for name, window in quota["windows"].items() if usage.timestamp(window.get("resets_at"))}
+    named = quota.get("rejected_window")
+    if named in timed:
+        return named
+    def reset(name):
+        return usage.timestamp(timed[name]["resets_at"]).timestamp()
+    full = [name for name, window in timed.items() if window.get("used") is not None and window["used"] >= 1]
+    unknown = [name for name, window in timed.items() if window.get("used") is None]
+    for group in (full, unknown):
+        if group:
+            return min(group, key=reset)
+    return min(timed, key=lambda name: (-timed[name]["used"], reset(name)), default=None)
+
+
 def quota_assessment(observation, thresholds, now):
     """Expired windows impose no constraint; unknown duration disables pacing."""
     quota = observation["quota"]
     reasons, tight, exhausted = [], False, False
     windows = {}
-    # A rejection lasts until the most-used window resets, not the longest one.
-    timed = [(name, window) for name, window in quota["windows"].items() if usage.timestamp(window.get("resets_at"))]
-    binding = min(timed, key=lambda item: (-(item[1].get("used") if item[1].get("used") is not None else -1),
-                                           usage.timestamp(item[1]["resets_at"]).timestamp()), default=(None, None))[0]
+    binding = rejection_window(quota)
     for name, window in quota["windows"].items():
         reset = usage.timestamp(window.get("resets_at"))
         active = reset is None or reset.timestamp() > now
