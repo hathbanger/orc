@@ -33,6 +33,10 @@ after its name. Aliases and hidden subcommands are included below.
 - [fusion runs](#fusion-runs)
 - [fusion trace](#fusion-trace)
 - [fusion usage](#fusion-usage)
+- [fusion control](#fusion-control)
+- [fusion control status](#fusion-control-status)
+- [fusion control pause](#fusion-control-pause)
+- [fusion control resume](#fusion-control-resume)
 - [fusion telemetry](#fusion-telemetry)
 - [fusion telemetry status](#fusion-telemetry-status)
 - [fusion telemetry on](#fusion-telemetry-on)
@@ -76,12 +80,12 @@ after its name. Aliases and hidden subcommands are included below.
 ```text
 usage: fusion [-h] [--workspace WORKSPACE] [--control-workspace CONTROL_WORKSPACE]
               [--json] [--progress | --quiet]
-              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,quota,mcp-serve} ...
+              {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,control,telemetry,decisions,learn,gym,quota,mcp-serve} ...
 
 Lead/sidekick orchestration for Claude Code, Codex CLI, and Antigravity CLI
 
 positional arguments:
-  {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,telemetry,decisions,learn,gym,quota,mcp-serve}
+  {truffle,ui,lead,build,run,delegate,outcome,ultra,workflow,doctor,status,runs,trace,usage,control,telemetry,decisions,learn,gym,quota,mcp-serve}
     truffle               scout tractable GitHub issues and queue isolated fixes
     ui                    open the local ORC/Fusion control room in your browser
     lead                  launch an interactive lead agent with the Fusion MCP server
@@ -97,6 +101,8 @@ positional arguments:
     status (runs)         show recent runs
     trace                 show recent telemetry spans
     usage                 show local ORC, Claude and Codex usage and quota
+    control               operator pause: stop new worker runs from every caller (quota
+                          probes still run)
     telemetry             local and remote telemetry configuration
     decisions             local Laya setup, decisions and reviewed learning
     learn                 advance and inspect Laya's learning loop without the control
@@ -595,6 +601,66 @@ options:
   --record                save one full snapshot per UTC day
   --context-threshold CONTEXT_THRESHOLD
   --calls-per-hour-threshold CALLS_PER_HOUR_THRESHOLD
+```
+
+## fusion control
+
+operator pause: stop new worker runs from every caller (quota probes still run)
+
+```text
+usage: fusion control [-h] {status,pause,resume} ...
+
+positional arguments:
+  {status,pause,resume}
+    status               show whether workers are paused, and every control file
+    pause                refuse new worker runs until resumed or --until
+    resume               allow worker runs again
+
+options:
+  -h, --help             show this help message and exit
+```
+
+## fusion control status
+
+show whether workers are paused, and every control file
+
+```text
+usage: fusion control status [-h] [--json]
+
+options:
+  -h, --help  show this help message and exit
+  --json
+```
+
+## fusion control pause
+
+refuse new worker runs until resumed or --until
+
+```text
+usage: fusion control pause [-h] [--reason REASON] [--until UNTIL]
+                            [--scope {host,workspace}]
+
+options:
+  -h, --help              show this help message and exit
+  --reason REASON
+  --until UNTIL           ISO time the pause ends on its own, e.g. 2026-10-05T12:00:00Z
+  --scope {host,workspace}
+                          host: ORC_HOME/control.json (default); workspace:
+                          $FUSION_CONTROL_WORKSPACE/.fusion/control.json
+```
+
+## fusion control resume
+
+allow worker runs again
+
+```text
+usage: fusion control resume [-h] [--scope {host,workspace}]
+
+options:
+  -h, --help              show this help message and exit
+  --scope {host,workspace}
+                          host: ORC_HOME/control.json (default); workspace:
+                          $FUSION_CONTROL_WORKSPACE/.fusion/control.json
 ```
 
 ## fusion telemetry

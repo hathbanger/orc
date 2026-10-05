@@ -33,7 +33,12 @@ WORKFLOW_SCHEMA = "fusion.workflow.v1"
 NODE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TERMINAL_SUCCESS = {"success"}
 TERMINAL_FAILURE = {"failed", "blocked", "invalid"}
-TERMINAL_PAUSED = {"paused_quota", "paused_budget"}
+TERMINAL_PAUSED = {"paused_quota", "paused_budget", "paused_control"}
+
+
+def control_pause():
+    import fusion_control
+    return fusion_control.paused()
 LANE_COOLDOWN_SECONDS = core.LANE_COOLDOWN_SECONDS
 
 
@@ -1675,6 +1680,8 @@ BLOCKERS: unresolved issues, or none
             return "paused_quota"
         if "paused_budget" in statuses:
             return "paused_budget"
+        if "paused_control" in statuses:
+            return "paused_control"
         if statuses & TERMINAL_FAILURE:
             return "failed"
         if statuses == {"success"}:
@@ -1731,6 +1738,14 @@ BLOCKERS: unresolved issues, or none
                         selected = node
                         break
                     if selected is None:
+                        break
+                    pause = control_pause()
+                    if pause:
+                        for node in ready:
+                            node["status"] = "paused_control"
+                            node["result"] = {"status": "paused_control", "summary": "operator pause before dispatch",
+                                              "blockers": [f"control: {pause['reason']} ({pause['path']})"], "control": pause}
+                            self._event("node.paused_control", {"node_id": node["id"], "reason": pause["reason"]})
                         break
                     if self.spec["budget_usd"] and self._spent() >= self.spec["budget_usd"]:
                         for node in ready:
@@ -1795,6 +1810,12 @@ BLOCKERS: unresolved issues, or none
                         payload = {"task": {}, "result": {"status": "error", "summary": "worker thread failed", "blockers": [str(exc)]}}
                     node = self.nodes[node_id]
                     result = payload.get("result") or {}
+                    if result.get("status") == "paused_control":
+                        # Paused between the check and the dispatch: nothing ran, so it is not an attempt.
+                        node["status"], node["result"] = "paused_control", result
+                        node["attempts"] = max(0, node["attempts"] - 1)
+                        self._event("node.paused_control", {"node_id": node_id, "reason": (result.get("control") or {}).get("reason")})
+                        continue
                     worker_blockers = list(result.get("blockers") or [])
                     provenance = {}
                     if node.get("repair_feedback"):
@@ -2095,7 +2116,7 @@ def workflow_report(workspace: Path, run_id: str) -> dict[str, Any]:
         "artifacts": manifest.get("artifacts") or {},
         "resume_command": (
             command(workspace, "--progress", "workflow", "resume", run_id)
-            if status in {"paused_quota", "paused_budget", "interrupted", "failed"}
+            if status in {"paused_quota", "paused_budget", "paused_control", "interrupted", "failed"}
             else None
         ),
     }

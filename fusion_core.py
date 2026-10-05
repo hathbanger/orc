@@ -2264,6 +2264,17 @@ def dispatch(
     if os.environ.get("FUSION_READ_ONLY") == "1" and task["write"]:
         raise ValueError("this Fusion session permits read-only work only")
     task["workspace"] = str(Path(task["workspace"]).resolve())
+    if not task.get("quota_probe"):
+        # An operator pause stops new workers from every caller before routing
+        # or spawning anything; quota probes still run so accounts can be watched.
+        import fusion_control
+        pause = fusion_control.paused()
+        if pause:
+            from fusion_decisions import DecisionStore
+            DecisionStore(store.workspace).append("routing_log", task_id=task.get("run_id"), scope="control", reason="control",
+                                                  role=task.get("role"), write=bool(task.get("write")), chosen=None, control=pause)
+            progress.emit(task.get("progress_label", task.get("role", "worker")), "paused by operator control; no worker started")
+            return fusion_control.paused_result(task, pause)
     if store.control_workspace is not None:
         # A shared store must never resume another checkout's conversation.
         suffix = ":workspace=" + hashlib.sha256(task["workspace"].encode()).hexdigest()
@@ -3080,7 +3091,7 @@ def print_result(result: dict[str, Any], as_json: bool) -> None:
         print("blockers:")
         for blocker in result["blockers"]:
             print(f"  - {blocker}")
-    print(f"run: {result['artifacts']['run_dir']}")
+    print(f"run: {result['artifacts']['run_dir'] or 'none (no worker was started)'}")
 
 
 def print_ultra_result(result: dict[str, Any], as_json: bool) -> None:
@@ -3269,6 +3280,17 @@ def build_parser() -> argparse.ArgumentParser:
     usage.add_argument("--context-threshold", type=float, default=200000)
     usage.add_argument("--calls-per-hour-threshold", type=float, default=60)
 
+    control = sub.add_parser("control", help="operator pause: stop new worker runs from every caller (quota probes still run)")
+    control_sub = control.add_subparsers(dest="control_command", required=True)
+    control_status = control_sub.add_parser("status", help="show whether workers are paused, and every control file")
+    control_status.add_argument("--json", action="store_true")
+    control_pause = control_sub.add_parser("pause", help="refuse new worker runs until resumed or --until")
+    control_pause.add_argument("--reason", default="operator pause")
+    control_pause.add_argument("--until", help="ISO time the pause ends on its own, e.g. 2026-10-05T12:00:00Z")
+    control_resume = control_sub.add_parser("resume", help="allow worker runs again")
+    for cmd in (control_pause, control_resume):
+        cmd.add_argument("--scope", choices=("host", "workspace"), default="host",
+                         help="host: ORC_HOME/control.json (default); workspace: $FUSION_CONTROL_WORKSPACE/.fusion/control.json")
     telemetry = sub.add_parser("telemetry", help="local and remote telemetry configuration")
     telemetry_sub = telemetry.add_subparsers(dest="telemetry_command", required=True)
     telemetry_sub.add_parser("status", help="show effective remote telemetry state and reasons sending is disabled")
@@ -3375,6 +3397,28 @@ def _main(args, parser) -> int:
     if args.command == "trace":
         payload = RunStore(workspace).traces(args.limit)
         print(json_text(payload))
+        return 0
+    if args.command == "control":
+        import fusion_control
+        if args.control_command == "status":
+            payload = fusion_control.status()
+            if args.json:
+                print(json_text(payload))
+            else:
+                pause = payload["paused"]
+                print(f"paused: {pause['reason']}" + (f" until {pause['until']}" if pause.get("until") else "") + f" ({pause['path']})"
+                      if pause else "running: no operator pause")
+            return 2 if payload["paused"] else 0
+        if args.scope == "workspace" and fusion_control.workspace_path() is None:
+            parser.error("--scope workspace needs FUSION_CONTROL_WORKSPACE")
+        path = fusion_control.host_path() if args.scope == "host" else fusion_control.workspace_path()
+        try:
+            written = (fusion_control.write("pause", args.reason, args.until, path) if args.control_command == "pause"
+                       else fusion_control.write("run", path=path))
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        pause = fusion_control.paused()
+        print(f"{args.control_command}d: {written}" + (f"; still paused by {pause['path']}" if args.control_command == "resume" and pause else ""))
         return 0
     if args.command == "telemetry":
         remote = (config.get("telemetry") or {}).get("remote") or {}
@@ -3499,7 +3543,7 @@ def _main(args, parser) -> int:
         status = result.get("status")
         if result.get("publication", {}).get("status") == "failed":
             return 1
-        return 0 if status in {"success", "published", "preview"} else 2 if status in {"paused_quota", "paused_budget", "running"} else 1
+        return 0 if status in {"success", "published", "preview"} else 2 if status in {"paused_quota", "paused_budget", "paused_control", "running"} else 1
     if args.command == "build":
         from fusion_publish import options as publish_options
         overrides = {key: getattr(args, arg) for key, arg in (("mode", "publish"), ("base", "base"), ("remote", "remote"), ("draft", "draft")) if getattr(args, arg) is not None}
@@ -3574,7 +3618,7 @@ def _main(args, parser) -> int:
         )
         result = dispatch(config, task, RunStore(workspace))
         print_result(result, args.json)
-        return 0 if result["status"] == "success" else 1
+        return 0 if result["status"] == "success" else 2 if result["status"] == "paused_control" else 1
     parser.error("unknown command")
     return 2
 
