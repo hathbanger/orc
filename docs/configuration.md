@@ -345,6 +345,16 @@ output that merely mentions one. Each `denied` entry in the result records Claud
 Code's `reason_type` (its `decision_reason_type`, for example `asyncAgent` for a
 command that needed approval nobody could give) and `message`.
 
+For unattended writers, `claude.permission_mode: "bypassPermissions"` with Claude
+Code's sandbox enabled in the worker's settings removes approval prompts nobody
+can answer, while the OS sandbox still bounds Bash (writes outside the workspace
+and `$TMPDIR` fail) and `permissions.deny` rules still bind (verified on Claude
+Code 2.1.289: an Edit in the worktree succeeds, a Write under a denied home path
+is refused). ORC applies `permission_mode` only to tasks that write; readers
+stay in `plan`. The sandbox covers Bash only, so deny `Edit(...)` on paths a
+writer must never change (for example `Edit(//Users/<you>/**)` when worktrees
+live under `/tmp`) and on evaluation files a worker could game.
+
 ## Antigravity settings
 
 In restricted mode, Fusion launches `agy` with `--sandbox` and uses `plan` for
