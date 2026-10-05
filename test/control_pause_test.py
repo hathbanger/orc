@@ -61,6 +61,9 @@ class ControlPauseTest(unittest.TestCase):
         [row] = [e for e in read_jsonl(DecisionStore(self.workspace).path) if e.get("event") == "routing_log"]
         self.assertEqual((row["scope"], row["reason"], row["chosen"]), ("control", "control", None))
         self.assertEqual(row["control"]["reason"], "outage")
+        from fusion_policy import routing_report
+        report = routing_report(read_jsonl(DecisionStore(self.workspace).path))
+        self.assertEqual((report["logged_choices"], report["control_refusals"]), (0, 1))
 
     def test_quota_probes_still_run(self):
         self.pause()

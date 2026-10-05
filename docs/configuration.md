@@ -261,6 +261,10 @@ The pause lives in `control.json` under ORC_HOME (`--scope host`, the default) o
 for a shared control workspace, in `$FUSION_CONTROL_WORKSPACE/.fusion/control.json`
 (`--scope workspace`). Either one pausing is a pause, and a control file that
 can't be read pauses too. The file is `{"state": "pause" | "run", "reason", "until"}`.
+`fusion decisions routing-report` counts these refusals as `control_refusals`,
+not as routing choices. If the control workspace is a git checkout that a host
+pulls on its own (a report loop, a driver), tracking `.fusion/control.json` there
+lets one commit pause that host's workers even when nobody can reach it.
 
 ## Runtime permissions
 
