@@ -5,7 +5,9 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-HANDOFF = re.compile(r"(^|/)(OASIS|TENET)_[A-Z0-9_]*\d{4}-\d{2}-\d{2}\.(md|zip)$|(^|/)ORC_TENET_REVIEW_")
+# A dated, all-caps handoff document at the repository root: another project's
+# hand-over notes, not ORC documentation (which lives under docs/).
+HANDOFF = re.compile(r"^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_\d{4}-\d{2}-\d{2}\.(md|zip)$")
 
 
 class RepoHygieneTest(unittest.TestCase):
@@ -27,9 +29,10 @@ class RepoHygieneTest(unittest.TestCase):
 
     def test_no_private_handoff_documents_are_committed(self):
         self.assertEqual([path for path in self.tracked() if HANDOFF.search(path)], [])
-        self.assertTrue(HANDOFF.search("OASIS_DOGFOOD_RUN_2026-09-23.md"))
-        self.assertTrue(HANDOFF.search("TENET_VNEXT_ANALYSIS_2026-09-23.md"))
+        self.assertTrue(HANDOFF.search("PROJECT_HANDOFF_2026-09-23.md"))
+        self.assertTrue(HANDOFF.search("PRODUCT_REVIEW_2026-09-23.zip"))
         self.assertFalse(HANDOFF.search("docs/routing.md"))
+        self.assertFalse(HANDOFF.search("README.md"))
 
 
 if __name__ == "__main__":
