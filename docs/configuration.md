@@ -170,7 +170,12 @@ subscription login whenever one is in its environment. Fusion removes both
 from every Claude worker unless its agent or route declares
 `"billing": "api"`, even when the parent shell exports a key, and records the
 credential Claude reports using (`api_key_source`) on each result. A
-subscription lane that still ran on a key gets a `billing:` blocker.
+subscription lane that still ran on a key gets a `billing:` blocker. From the
+same init event, each Claude result also records `provider_version` (Claude
+Code's version) and `provider_permission_mode` (the permission mode the run
+actually had). The same flags and settings can approve or deny a command
+differently across Claude Code versions, so these fields are what a
+`denied` entry is diagnosed against.
 `fusion doctor` warns when either variable is set in the current shell,
 because interactive sessions started from it bill the key too.
 
